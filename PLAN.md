@@ -1,4 +1,4 @@
-# PLAN.md — OpenClaw HeyBoy Voice Project
+# PLAN.md — Heyboy Voice Assistant Project
 
 ## Canonical Chat Log (verbatim project conversation)
 
@@ -62,3 +62,33 @@ Config/rule files updated:
 - `heyboy-voice-existing-solutions`
 - `producer-player-build` (separate project, still tracked)
 - `wordfinder-landing-release-pipeline` (legacy stale run being monitored)
+
+---
+
+### [2026-03-07 00:09 Europe/London] User
+"Also, I want you to keep a plan dot m d file that contains all the messages I send you about this HeyBoy project. I wanna keep track of every message back and forth that we send each other about this project in the repo. Also, make sure to commit the repo. Let's make it open source as well. Let's also make it so it works with your locally installed, Claude code or codec CLI. You can just select or any other CLI. And yeah. This should be an open source public repo. And it should also work with OpenClaw if you've got that installed because you so I expect users who download it to have one of these things installed and just have a nice setup, easy setup CLI process kinda inspired by OpenClaw. By the way, did you start a new chat? Or were you unable to? It's fine if you weren't able to, but I just wanna know. And, oh, yeah, go back and add all the previous conversations about this project so far into that plan dot m d file."
+
+### [2026-03-07 00:11 Europe/London] User
+"Also, I want you to keep a plan dot m d file that contains all the messages I send you about this HeyBoy project. I wanna keep track of every message back and forth that we send each other about this project in the repo. Also, make sure to commit the repo. Let's make it open source as well. Let's also make it so it works with your locally installed, Claude code or codec CLI. You can just select or any other CLI. And yeah. This should be an open source public repo. And it should also work with OpenClaw if you've got that installed because you so I expect users who download it to have one of these things installed and just have a nice setup, easy setup CLI process kinda inspired by OpenClaw. By the way, did you start a new chat? Or were you unable to? It's fine if you weren't able to, but I just wanna know. And, oh, yeah, go back and add all the previous conversations about this project so far into that plan dot m d file."
+
+### [2026-03-07 00:12 Europe/London] Assistant
+"Progress update: pulled latest, continued from commit e0ec36a, and implemented compatibility scaffolding for OpenClaw API/Codex CLI/Claude Code CLI + generic CLI."
+
+### [2026-03-07 00:17 Europe/London] User
+"I don't want the repo to be called OpenCraw Heyboy Voice. Just Heyboy voice assistant, and the description should be, like, works with any AI subscription. Works with any of your AI subscriptions. Sorry."
+
+### [2026-03-07 00:18 Europe/London] Assistant
+"Applied naming update: repo renamed to `heyboy-voice-assistant` and tagline standardized to 'Works with any of your AI subscriptions.'"
+
+### [2026-03-07 00:22 Europe/London] User
+"Is there a way, by the way, to make HeyBoy downloadable? And then it's just got everything it needs to just work out the box. You just leave it running as an app or as a CLI tool and also add Homebrew support. You can just install it with Brew, the app itself. Also, it should be hey boy dash voice dash. Actually, no. Sorry. Ignore that. It should be up till now. But yeah."
+
+### [2026-03-07 00:23 Europe/London] User
+"I want you to send a screenshot of it to me and test the app works in a sub agent."
+
+### [2026-03-07 00:35 Europe/London] Assistant
+"Smoke tests completed in this run:
+- CLI path: `scripts/heyboy run` starts successfully and reaches wake-listen loop.
+- App/daemon path: LaunchAgent install/start/status/stop verified (`scripts/heyboy app ...`).
+- Screenshot proof saved: `/Users/ethansk/.openclaw/workspace/artifacts/heyboy-voice-proof.png`.
+- Added downloadability docs, one-command installer (`scripts/install.sh`), and Homebrew formula (`Formula/heyboy-voice-assistant.rb`)."
