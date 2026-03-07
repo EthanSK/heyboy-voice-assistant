@@ -2,7 +2,7 @@
 
 **Works with any of your AI subscriptions.**
 
-A local-first voice assistant scaffold that wakes on **"hey boy"**, records a short listen window, transcribes locally, routes to your chosen AI backend, and speaks the reply with barge-in interruption.
+A local-first voice assistant scaffold that wakes on **"hey boy"**, records a short listen window, transcribes with **local Vosk or Deepgram STT**, routes to your chosen AI backend, and speaks the reply with barge-in interruption.
 
 ---
 
@@ -10,7 +10,9 @@ A local-first voice assistant scaffold that wakes on **"hey boy"**, records a sh
 
 - Always-on wake phrase detection (`hey boy`) via **Vosk**
 - 5–10s listen window (default `7s`)
-- Offline local STT via **Vosk**
+- STT options:
+  - `vosk_local` (offline local)
+  - `deepgram` (API, higher quality)
 - Backend routing:
   - `openclaw_api` (OpenAI-compatible token/API path)
   - `codex_cli`
@@ -28,6 +30,14 @@ A local-first voice assistant scaffold that wakes on **"hey boy"**, records a sh
 ```bash
 scripts/heyboy install
 scripts/heyboy setup openclaw --api-key "YOUR_TOKEN"
+scripts/heyboy doctor
+scripts/heyboy run
+```
+
+Use Deepgram for transcription:
+
+```bash
+scripts/heyboy setup codex --stt-backend deepgram --deepgram-api-key "$DEEPGRAM_API_KEY"
 scripts/heyboy doctor
 scripts/heyboy run
 ```
@@ -177,6 +187,33 @@ Not yet manually UI-verified in this run:
 - ❌ Windows runtime/manual verification (docs/scripts only)
 
 See: [docs/VALIDATION_STATUS.md](docs/VALIDATION_STATUS.md)
+
+---
+
+## STT compatibility
+
+### Vosk local STT
+
+Default local path:
+
+- `STT_BACKEND=vosk_local`
+- requires local Vosk model files
+
+### Deepgram STT
+
+Use when you want higher transcription quality:
+
+- `STT_BACKEND=deepgram`
+- `DEEPGRAM_API_KEY=<your key>`
+- `DEEPGRAM_MODEL=nova-3` (default)
+
+You can set these via CLI setup flags:
+
+```bash
+scripts/heyboy setup codex --stt-backend deepgram --deepgram-api-key "$DEEPGRAM_API_KEY"
+```
+
+`heyboy doctor` validates Deepgram key presence when `STT_BACKEND=deepgram`.
 
 ---
 

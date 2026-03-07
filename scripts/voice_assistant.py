@@ -5,7 +5,7 @@ heyboy voice assistant — Part 1 scaffold
 Pipeline:
 1) Always-on local wake phrase detection ("hey boy") with Vosk
 2) 5–10s listen window (default 7s)
-3) Local transcription (Vosk)
+3) Transcription (Vosk local or Deepgram API)
 4) Route transcript to selected assistant backend:
    - OpenAI-compatible HTTP (OpenClaw/OpenAI/OpenRouter/etc.)
    - Codex CLI
@@ -17,6 +17,7 @@ Pipeline:
 from __future__ import annotations
 
 import atexit
+import io
 import json
 import logging
 import os
@@ -62,6 +63,19 @@ if CHUNK_DURATION_S > 0.50:
     CHUNK_DURATION_S = 0.50
 CHUNK_SIZE = max(1, int(SAMPLE_RATE * CHUNK_DURATION_S))
 VOSK_MODEL_PATH = os.getenv("VOSK_MODEL_PATH", "models/vosk-model-small-en-us")
+
+# Speech-to-text backend
+_STT_BACKEND_RAW = os.getenv("STT_BACKEND", "vosk_local").strip().lower()
+if _STT_BACKEND_RAW in ("vosk", "vosk_local", "local"):
+    STT_BACKEND = "vosk_local"
+elif _STT_BACKEND_RAW in ("deepgram", "deepgram_api"):
+    STT_BACKEND = "deepgram"
+else:
+    STT_BACKEND = _STT_BACKEND_RAW
+
+DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY", "")
+DEEPGRAM_MODEL = os.getenv("DEEPGRAM_MODEL", "nova-3")
+DEEPGRAM_TIMEOUT = int(os.getenv("DEEPGRAM_TIMEOUT", "20"))
 
 # API backend (OpenAI-compatible)
 API_BASE_URL = os.getenv("API_BASE_URL", "http://127.0.0.1:3333")
@@ -376,7 +390,7 @@ def record_audio(duration_s: int) -> np.ndarray:
 
 
 
-def transcribe(audio: np.ndarray, model: vosk.Model) -> str:
+def transcribe_vosk_local(audio: np.ndarray, model: vosk.Model) -> str:
     recognizer = vosk.KaldiRecognizer(model, SAMPLE_RATE)
     recognizer.SetWords(True)
 
@@ -386,9 +400,76 @@ def transcribe(audio: np.ndarray, model: vosk.Model) -> str:
         recognizer.AcceptWaveform(raw[idx : idx + step])
 
     final = json.loads(recognizer.FinalResult())
-    text = (final.get("text") or "").strip()
-    logger.info("Transcribed: %r", text)
-    return text
+    return (final.get("text") or "").strip()
+
+
+
+def transcribe_deepgram(audio: np.ndarray) -> str:
+    if not DEEPGRAM_API_KEY:
+        logger.error("DEEPGRAM_API_KEY is empty but STT_BACKEND=deepgram.")
+        return ""
+
+    wav_io = io.BytesIO()
+    sf.write(wav_io, audio, SAMPLE_RATE, subtype="PCM_16", format="WAV")
+    wav_io.seek(0)
+
+    url = "https://api.deepgram.com/v1/listen"
+    headers = {
+        "Authorization": f"Token {DEEPGRAM_API_KEY}",
+        "Content-Type": "audio/wav",
+    }
+    params = {
+        "model": DEEPGRAM_MODEL,
+        "smart_format": "true",
+    }
+
+    try:
+        response = requests.post(
+            url,
+            headers=headers,
+            params=params,
+            data=wav_io.read(),
+            timeout=DEEPGRAM_TIMEOUT,
+        )
+        response.raise_for_status()
+        data = response.json()
+        channels = data.get("results", {}).get("channels", [])
+        if not channels:
+            return ""
+        alternatives = channels[0].get("alternatives", [])
+        if not alternatives:
+            return ""
+        return (alternatives[0].get("transcript") or "").strip()
+    except requests.exceptions.Timeout:
+        logger.error("Deepgram STT timed out after %ss", DEEPGRAM_TIMEOUT)
+        return ""
+    except requests.exceptions.HTTPError as exc:
+        status = exc.response.status_code if exc.response else "?"
+        body = (exc.response.text[:240] if exc.response is not None else "")
+        logger.error("Deepgram STT HTTP error %s: %s", status, body)
+        return ""
+    except requests.exceptions.RequestException as exc:
+        logger.error("Deepgram STT request failed: %s", exc)
+        return ""
+    except (ValueError, KeyError, IndexError) as exc:
+        logger.error("Deepgram STT response parse error: %s", exc)
+        return ""
+
+
+
+def transcribe(audio: np.ndarray, model: vosk.Model) -> str:
+    if STT_BACKEND == "vosk_local":
+        text = transcribe_vosk_local(audio, model)
+        logger.info("Transcribed (vosk_local): %r", text)
+        return text
+
+    if STT_BACKEND == "deepgram":
+        text = transcribe_deepgram(audio)
+        logger.info("Transcribed (deepgram:%s): %r", DEEPGRAM_MODEL, text)
+        return text
+
+    logger.error("Unsupported STT_BACKEND=%r", STT_BACKEND)
+    return ""
 
 
 # ---------------------------------------------------------------------------
@@ -646,6 +727,9 @@ def print_startup_banner() -> None:
     logger.info("=" * 66)
     logger.info("heyboy voice assistant — Part 1")
     logger.info("Backend    : %s", ASSISTANT_BACKEND)
+    logger.info("STT        : %s", STT_BACKEND)
+    if STT_BACKEND == "deepgram":
+        logger.info("STT model  : %s", DEEPGRAM_MODEL)
     logger.info("Model      : %s", MODEL_NAME)
     logger.info("Thinking   : %s", THINKING_LEVEL)
     logger.info("Wake phrase: %r", WAKE_PHRASE)
@@ -660,6 +744,20 @@ def print_startup_banner() -> None:
 
 def main() -> None:
     if not acquire_instance_lock():
+        return
+
+    if STT_BACKEND not in ("vosk_local", "deepgram"):
+        logger.error(
+            "Unsupported STT_BACKEND=%r. Use one of: vosk_local, deepgram",
+            STT_BACKEND,
+        )
+        return
+
+    if STT_BACKEND == "deepgram" and not DEEPGRAM_API_KEY:
+        logger.error(
+            "STT_BACKEND is deepgram but DEEPGRAM_API_KEY is missing. "
+            "Set it in your environment or .env file."
+        )
         return
 
     ensure_recommended_listen_window()
