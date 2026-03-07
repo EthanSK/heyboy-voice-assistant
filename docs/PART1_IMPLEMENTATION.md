@@ -115,17 +115,22 @@ python3 -m py_compile scripts/voice_assistant.py
 scripts/heyboy doctor
 ```
 
-Smoke-test run commands (executed):
+Smoke/integration commands (executed):
 
 ```bash
 scripts/heyboy install
-scripts/heyboy setup generic --command "python3 -c \"import sys; print('SMOKE BACKEND OK')\""
+scripts/heyboy setup generic --command "python3 scripts/tests/smoke_backend.py"
 scripts/heyboy doctor
 scripts/heyboy app start
 scripts/heyboy app status
 scripts/heyboy app stop
 scripts/heyboy run
+scripts/tests/e2e_smoke_macos.sh
 ```
+
+Latest E2E artifact directory:
+
+- `artifacts/e2e/20260307-010213/`
 
 Screenshot proof path:
 
