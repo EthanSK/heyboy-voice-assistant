@@ -55,8 +55,12 @@ WAKE_PHRASE_RAW = os.getenv("WAKE_PHRASE", "hey boy")
 LISTEN_SECONDS = int(os.getenv("LISTEN_SECONDS", os.getenv("RECORD_SECONDS", "7")))
 SAMPLE_RATE = int(os.getenv("SAMPLE_RATE", "16000"))
 CHANNELS = 1
-CHUNK_DURATION_S = 0.10
-CHUNK_SIZE = int(SAMPLE_RATE * CHUNK_DURATION_S)
+CHUNK_DURATION_S = float(os.getenv("AUDIO_CHUNK_DURATION_S", "0.20"))
+if CHUNK_DURATION_S < 0.05:
+    CHUNK_DURATION_S = 0.05
+if CHUNK_DURATION_S > 0.50:
+    CHUNK_DURATION_S = 0.50
+CHUNK_SIZE = max(1, int(SAMPLE_RATE * CHUNK_DURATION_S))
 VOSK_MODEL_PATH = os.getenv("VOSK_MODEL_PATH", "models/vosk-model-small-en-us")
 
 # API backend (OpenAI-compatible)
@@ -646,6 +650,7 @@ def print_startup_banner() -> None:
     logger.info("Thinking   : %s", THINKING_LEVEL)
     logger.info("Wake phrase: %r", WAKE_PHRASE)
     logger.info("Listen win : %ss", LISTEN_SECONDS)
+    logger.info("Audio chunk: %.2fs", CHUNK_DURATION_S)
     logger.info("Barge-in   : rms>%.3f hold=%sms", BARGE_IN_THRESHOLD, BARGE_IN_HOLD_MS)
     if ASSISTANT_BACKEND == "openclaw_api":
         logger.info("API base   : %s", API_BASE_URL)
