@@ -14,7 +14,6 @@ class HeyboyVoiceAssistant < Formula
     (bin/"heyboy").write_env_script(
       libexec/"scripts/heyboy",
       {
-        "HEYBOY_PROJECT_ROOT" => libexec,
         "PATH" => "#{Formula["python@3.11"].opt_bin}:#{ENV["PATH"]}"
       }
     )

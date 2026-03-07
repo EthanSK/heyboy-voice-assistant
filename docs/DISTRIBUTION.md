@@ -36,10 +36,11 @@ scripts/heyboy doctor
 scripts/heyboy run
 ```
 
-## C) Homebrew (interim formula path)
+## C) Homebrew (interim tap + formula path)
 
 ```bash
-brew install --HEAD https://raw.githubusercontent.com/EthanSK/heyboy-voice-assistant/main/Formula/heyboy-voice-assistant.rb
+brew tap EthanSK/heyboy-voice-assistant https://github.com/EthanSK/heyboy-voice-assistant
+brew install --HEAD ethansk/heyboy-voice-assistant/heyboy-voice-assistant
 heyboy install
 heyboy setup openclaw --api-key "YOUR_TOKEN"
 heyboy doctor
@@ -76,9 +77,16 @@ Logs:
 
 ## Homebrew support status
 
-Implemented for now as a **HEAD formula** in-repo:
+Implemented for now as a **HEAD formula + tap workflow**:
 
 - `Formula/heyboy-voice-assistant.rb`
+- tap command: `brew tap EthanSK/heyboy-voice-assistant https://github.com/EthanSK/heyboy-voice-assistant`
+
+Validated command (dry-run):
+
+```bash
+brew install --HEAD ethansk/heyboy-voice-assistant/heyboy-voice-assistant --dry-run
+```
 
 This gives users immediate `brew install` support without waiting for signed app bundles.
 

@@ -92,3 +92,9 @@ Config/rule files updated:
 - App/daemon path: LaunchAgent install/start/status/stop verified (`scripts/heyboy app ...`).
 - Screenshot proof saved: `/Users/ethansk/.openclaw/workspace/artifacts/heyboy-voice-proof.png`.
 - Added downloadability docs, one-command installer (`scripts/install.sh`), and Homebrew formula (`Formula/heyboy-voice-assistant.rb`)."
+
+### [2026-03-07 00:38 Europe/London] Assistant
+"Post-smoke hardening:
+- Fixed installer model download fallback (primary URL failure now auto-falls back to HuggingFace mirror).
+- Added Homebrew tap workflow and validated dry-run install command.
+- Committed and pushed updates on top of e0ec36a -> 2069c9f."
