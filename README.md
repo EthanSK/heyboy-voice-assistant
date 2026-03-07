@@ -49,10 +49,11 @@ heyboy doctor
 heyboy run
 ```
 
-## 2) Homebrew (interim)
+## 2) Homebrew (interim tap + formula)
 
 ```bash
-brew install --HEAD https://raw.githubusercontent.com/EthanSK/heyboy-voice-assistant/main/Formula/heyboy-voice-assistant.rb
+brew tap EthanSK/heyboy-voice-assistant https://github.com/EthanSK/heyboy-voice-assistant
+brew install --HEAD ethansk/heyboy-voice-assistant/heyboy-voice-assistant
 heyboy install
 heyboy setup openclaw --api-key "YOUR_TOKEN"
 heyboy doctor
