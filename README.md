@@ -10,6 +10,7 @@ A local-first voice assistant scaffold that wakes on **"hey boy"**, records a sh
 
 - Always-on wake phrase detection (`hey boy`) via **Vosk**
 - 5–10s listen window (default `7s`)
+- Multi-turn follow-up session mode (no need to re-say wake word for immediate follow-ups)
 - STT options:
   - `vosk_local` (offline local)
   - `deepgram` (API, higher quality)
@@ -19,6 +20,7 @@ A local-first voice assistant scaffold that wakes on **"hey boy"**, records a sh
   - `claude_cli`
   - `generic_cli`
 - Barge-in interruption while assistant is speaking
+- Audio/STT/API failure recovery messaging (no silent failures)
 - OpenClaw-style helper CLI: `heyboy` / `scripts/heyboy`
 - macOS app/daemon mode with LaunchAgent
 - OpenClaw-skill-style wrapper under `skills/heyboy-voice-assistant/`
@@ -164,6 +166,12 @@ Headless macOS mode (allow daemon step skip):
 HEYBOY_ALLOW_DAEMON_SKIP=1 scripts/tests/e2e_smoke_macos.sh
 ```
 
+Run focused regression/unit coverage (multi-turn + no-reply safeguards):
+
+```bash
+scripts/tests/run_voice_assistant_unit.sh
+```
+
 Artifacts produced per run:
 
 - `artifacts/e2e/<timestamp>/summary.txt`
@@ -259,6 +267,25 @@ scripts/heyboy setup claude
 scripts/heyboy setup generic --command "ollama run llama3.2"
 ```
 
+### Multi-turn reliability controls
+
+By default, HeyBoy keeps a short follow-up window open after each response.
+This is what prevents the “first turn works, second turn is silent” failure mode.
+
+Key `.env` settings:
+
+- `MULTI_TURN_ENABLED=1`
+- `MULTI_TURN_MAX_TURNS=3`
+- `FOLLOWUP_LISTEN_SECONDS=7`
+- `NO_SPEECH_RETRY_LIMIT=1`
+- `WAKE_ONLY_RETRY_LIMIT=1`
+
+Disable multi-turn if you prefer explicit wake-word each turn:
+
+```bash
+MULTI_TURN_ENABLED=0
+```
+
 ---
 
 ## Docs
@@ -270,6 +297,7 @@ scripts/heyboy setup generic --command "ollama run llama3.2"
 - [docs/WINDOWS.md](docs/WINDOWS.md)
 - [docs/VALIDATION_STATUS.md](docs/VALIDATION_STATUS.md)
 - [PLAN.md](PLAN.md) (canonical append-only project conversation log)
+- [USE_CASE.md](USE_CASE.md) (interaction matrix + implementation coverage)
 
 ---
 

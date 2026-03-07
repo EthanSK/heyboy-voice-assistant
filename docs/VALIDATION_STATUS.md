@@ -5,9 +5,18 @@
 ### Commands actually run in this update
 
 ```bash
-scripts/package_openclaw_skill.sh
-scripts/tests/e2e_smoke_macos.sh
+scripts/tests/run_voice_assistant_unit.sh
+HEYBOY_ALLOW_DAEMON_SKIP=1 scripts/tests/e2e_smoke_macos.sh
+scripts/heyboy setup generic --command "python3 scripts/tests/smoke_backend.py"
+scripts/heyboy doctor
 ```
+
+### Unit test result (latest run)
+
+- test suite: `tests/test_voice_assistant.py`
+- total: `9`
+- pass: `9`
+- fail: `0`
 
 ### E2E result (latest run)
 
@@ -15,15 +24,15 @@ scripts/tests/e2e_smoke_macos.sh
 - cli_status: `PASS`
 - daemon_status: `PASS`
 - run_loop_status: `PASS`
-- artifact directory: `artifacts/e2e/20260307-010213/`
+- artifact directory: `artifacts/e2e/20260307-225618/`
 
 Key artifacts:
 
-- `artifacts/e2e/20260307-010213/summary.txt`
-- `artifacts/e2e/20260307-010213/summary.json`
-- `artifacts/e2e/20260307-010213/03-doctor.log`
-- `artifacts/e2e/20260307-010213/06-app-status.log`
-- `artifacts/e2e/20260307-010213/08-run-loop.log`
+- `artifacts/e2e/20260307-225618/summary.txt`
+- `artifacts/e2e/20260307-225618/summary.json`
+- `artifacts/e2e/20260307-225618/03-doctor.log`
+- `artifacts/e2e/20260307-225618/06-app-status.log`
+- `artifacts/e2e/20260307-225618/08-run-loop.log`
 
 ## UI/manual verification status
 

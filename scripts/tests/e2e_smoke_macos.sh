@@ -137,6 +137,7 @@ fi
 # 3) Foreground run-loop startup (timed smoke)
 RUN_LOOP_LOG="${RUN_DIR}/08-run-loop.log"
 if ! python3 - "$PROJECT_ROOT" "$RUN_LOOP_LOG" <<'PY'
+import os
 import subprocess
 import sys
 import time
@@ -149,9 +150,13 @@ cmd = [str(project_root / "scripts" / "heyboy"), "run"]
 max_seconds = 10.0
 
 with log_path.open("w", encoding="utf-8", errors="ignore") as log_file:
+    env = dict(os.environ)
+    env["INSTANCE_LOCK_PATH"] = str(log_path.parent / "run-loop-smoke.lock")
+
     proc = subprocess.Popen(
         cmd,
         cwd=str(project_root),
+        env=env,
         stdout=log_file,
         stderr=subprocess.STDOUT,
         text=True,

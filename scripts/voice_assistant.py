@@ -29,7 +29,7 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Callable, Dict, List, Optional
 
 import numpy as np
 import pyttsx3
@@ -41,6 +41,41 @@ from dotenv import load_dotenv
 
 if os.name == "posix":
     import fcntl
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None or raw.strip() == "":
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        print(
+            f"[heyboy] Invalid integer for {name}={raw!r}; using default {default}.",
+            file=sys.stderr,
+        )
+        return default
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw is None or raw.strip() == "":
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        print(
+            f"[heyboy] Invalid float for {name}={raw!r}; using default {default}.",
+            file=sys.stderr,
+        )
+        return default
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -54,16 +89,42 @@ ASSISTANT_BACKEND = os.getenv("ASSISTANT_BACKEND", "openclaw_api").strip().lower
 # Wake/listen
 WAKE_PHRASE_RAW = os.getenv("WAKE_PHRASE", "hey boy")
 LISTEN_ACK = os.getenv("LISTEN_ACK", "Hi, I'm listening.")
-LISTEN_SECONDS = int(os.getenv("LISTEN_SECONDS", os.getenv("RECORD_SECONDS", "7")))
-SAMPLE_RATE = int(os.getenv("SAMPLE_RATE", "16000"))
+LISTEN_SECONDS = _env_int("LISTEN_SECONDS", _env_int("RECORD_SECONDS", 7))
+SAMPLE_RATE = _env_int("SAMPLE_RATE", 16000)
 CHANNELS = 1
-CHUNK_DURATION_S = float(os.getenv("AUDIO_CHUNK_DURATION_S", "0.20"))
+CHUNK_DURATION_S = _env_float("AUDIO_CHUNK_DURATION_S", 0.20)
 if CHUNK_DURATION_S < 0.05:
     CHUNK_DURATION_S = 0.05
 if CHUNK_DURATION_S > 0.50:
     CHUNK_DURATION_S = 0.50
 CHUNK_SIZE = max(1, int(SAMPLE_RATE * CHUNK_DURATION_S))
 VOSK_MODEL_PATH = os.getenv("VOSK_MODEL_PATH", "models/vosk-model-small-en-us")
+
+# Multi-turn session behavior
+MULTI_TURN_ENABLED = _env_bool("MULTI_TURN_ENABLED", True)
+MULTI_TURN_MAX_TURNS = max(1, _env_int("MULTI_TURN_MAX_TURNS", 3))
+FOLLOWUP_LISTEN_SECONDS = max(1, _env_int("FOLLOWUP_LISTEN_SECONDS", LISTEN_SECONDS))
+NO_SPEECH_RETRY_LIMIT = max(0, _env_int("NO_SPEECH_RETRY_LIMIT", 1))
+WAKE_ONLY_RETRY_LIMIT = max(0, _env_int("WAKE_ONLY_RETRY_LIMIT", 1))
+NO_SPEECH_PROMPT = os.getenv("NO_SPEECH_PROMPT", "I didn't catch that.")
+WAKE_ONLY_PROMPT = os.getenv(
+    "WAKE_ONLY_PROMPT",
+    "I heard the wake phrase, but not your request.",
+)
+FOLLOWUP_PROMPT = os.getenv("FOLLOWUP_PROMPT", "Go ahead.")
+FOLLOWUP_NO_SPEECH_PROMPT = os.getenv(
+    "FOLLOWUP_NO_SPEECH_PROMPT",
+    "Still here. What next?",
+)
+FOLLOWUP_TIMEOUT_PROMPT = os.getenv(
+    "FOLLOWUP_TIMEOUT_PROMPT",
+    "Okay. Say hey boy when you want to continue.",
+)
+SESSION_END_PROMPT = os.getenv("SESSION_END_PROMPT", "")
+EMPTY_BACKEND_REPLY = os.getenv(
+    "EMPTY_BACKEND_REPLY", "Sorry, I don't have a response right now."
+)
+MAX_TRANSCRIPT_CHARS = max(80, _env_int("MAX_TRANSCRIPT_CHARS", 1200))
 
 # Speech-to-text backend
 _STT_BACKEND_RAW = os.getenv("STT_BACKEND", "vosk_local").strip().lower()
@@ -76,17 +137,17 @@ else:
 
 DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY", "")
 DEEPGRAM_MODEL = os.getenv("DEEPGRAM_MODEL", "nova-3")
-DEEPGRAM_TIMEOUT = int(os.getenv("DEEPGRAM_TIMEOUT", "20"))
+DEEPGRAM_TIMEOUT = _env_int("DEEPGRAM_TIMEOUT", 20)
 
 # API backend (OpenAI-compatible)
 API_BASE_URL = os.getenv("API_BASE_URL", "http://127.0.0.1:3333")
 API_KEY = os.getenv("API_KEY", "")
 MODEL_NAME = os.getenv("MODEL_NAME", "gpt-5.2")
 THINKING_LEVEL = os.getenv("THINKING_LEVEL", "low").strip().lower()
-LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.2"))
-LLM_TOP_P = float(os.getenv("LLM_TOP_P", "0.9"))
-LLM_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "400"))
-LLM_TIMEOUT = int(os.getenv("LLM_TIMEOUT", "30"))
+LLM_TEMPERATURE = _env_float("LLM_TEMPERATURE", 0.2)
+LLM_TOP_P = _env_float("LLM_TOP_P", 0.9)
+LLM_MAX_TOKENS = _env_int("LLM_MAX_TOKENS", 400)
+LLM_TIMEOUT = _env_int("LLM_TIMEOUT", 30)
 
 # CLI backends
 CODEX_CLI_COMMAND = os.getenv("CODEX_CLI_COMMAND", "codex exec")
@@ -94,7 +155,7 @@ CLAUDE_CLI_COMMAND = os.getenv(
     "CLAUDE_CLI_COMMAND", "claude --dangerously-skip-permissions --print"
 )
 GENERIC_CLI_COMMAND = os.getenv("GENERIC_CLI_COMMAND", "")
-CLI_TIMEOUT = int(os.getenv("CLI_TIMEOUT", "120"))
+CLI_TIMEOUT = _env_int("CLI_TIMEOUT", 120)
 
 SYSTEM_PROMPT = os.getenv(
     "SYSTEM_PROMPT",
@@ -102,13 +163,19 @@ SYSTEM_PROMPT = os.getenv(
 )
 
 # Barge-in
-BARGE_IN_THRESHOLD = float(os.getenv("BARGE_IN_THRESHOLD", "0.03"))
-BARGE_IN_HOLD_MS = int(os.getenv("BARGE_IN_HOLD_MS", "220"))
-BARGE_IN_GRACE_MS = int(os.getenv("BARGE_IN_GRACE_MS", "350"))
+BARGE_IN_THRESHOLD = _env_float("BARGE_IN_THRESHOLD", 0.03)
+BARGE_IN_HOLD_MS = _env_int("BARGE_IN_HOLD_MS", 220)
+BARGE_IN_GRACE_MS = _env_int("BARGE_IN_GRACE_MS", 350)
+
+# Audio recovery / diagnostics
+AUDIO_RETRY_ATTEMPTS = max(1, _env_int("AUDIO_RETRY_ATTEMPTS", 3))
+AUDIO_RETRY_BACKOFF_S = max(0.0, _env_float("AUDIO_RETRY_BACKOFF_S", 0.35))
+AUDIO_RETRY_BACKOFF_MAX_S = max(0.1, _env_float("AUDIO_RETRY_BACKOFF_MAX_S", 2.0))
 
 # Context + debug
-HISTORY_MAX_MESSAGES = int(os.getenv("HISTORY_MAX_MESSAGES", "20"))
-DEBUG_SAVE_AUDIO = os.getenv("DEBUG_SAVE_AUDIO", "0") == "1"
+HISTORY_MAX_MESSAGES = max(2, _env_int("HISTORY_MAX_MESSAGES", 20))
+HISTORY_MAX_CHARS = max(800, _env_int("HISTORY_MAX_CHARS", 12000))
+DEBUG_SAVE_AUDIO = _env_bool("DEBUG_SAVE_AUDIO", False)
 DEBUG_AUDIO_DIR = Path(os.getenv("DEBUG_AUDIO_DIR", "tmp/audio"))
 INSTANCE_LOCK_PATH = os.getenv("INSTANCE_LOCK_PATH", "/tmp/heyboy-voice-assistant.lock")
 
@@ -125,6 +192,7 @@ logging.basicConfig(
 logger = logging.getLogger("heyboy")
 
 ANSI_ESCAPE_RE = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
+_LAST_STT_ERROR: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -143,6 +211,80 @@ def normalize_text(text: str) -> str:
 WAKE_PHRASE = normalize_text(WAKE_PHRASE_RAW)
 
 
+def run_audio_with_retries(operation_name: str, fn: Callable[[], object]) -> object:
+    """Retry transient audio failures before surfacing an error."""
+    last_exc: Optional[Exception] = None
+    for attempt in range(1, AUDIO_RETRY_ATTEMPTS + 1):
+        try:
+            return fn()
+        except Exception as exc:  # noqa: BLE001 - audio stack errors vary by host/driver
+            last_exc = exc
+            if attempt >= AUDIO_RETRY_ATTEMPTS:
+                break
+            delay = min(AUDIO_RETRY_BACKOFF_MAX_S, AUDIO_RETRY_BACKOFF_S * attempt)
+            logger.warning(
+                "%s failed (attempt %s/%s): %s. Retrying in %.2fs",
+                operation_name,
+                attempt,
+                AUDIO_RETRY_ATTEMPTS,
+                exc,
+                delay,
+            )
+            time.sleep(delay)
+
+    if last_exc is not None:
+        raise last_exc
+    raise RuntimeError(f"{operation_name} failed unexpectedly")
+
+
+def is_wake_only_transcript(text: str) -> bool:
+    """True when transcript only repeats the wake phrase with no command."""
+    normalized = normalize_text(text)
+    return bool(normalized and WAKE_PHRASE and normalized == WAKE_PHRASE)
+
+
+def sanitize_transcript(text: str) -> str:
+    cleaned = (text or "").strip()
+    if not cleaned:
+        return ""
+    if len(cleaned) > MAX_TRANSCRIPT_CHARS:
+        logger.warning(
+            "Transcript exceeded MAX_TRANSCRIPT_CHARS=%s; truncating.",
+            MAX_TRANSCRIPT_CHARS,
+        )
+        return cleaned[:MAX_TRANSCRIPT_CHARS].strip()
+    return cleaned
+
+
+def trim_history(history: List[Dict[str, str]]) -> None:
+    """Bound history by message count and total character budget."""
+    if len(history) > HISTORY_MAX_MESSAGES:
+        del history[:-HISTORY_MAX_MESSAGES]
+
+    if HISTORY_MAX_CHARS <= 0:
+        return
+
+    total_chars = sum(len((msg.get("content") or "")) for msg in history)
+    while history and total_chars > HISTORY_MAX_CHARS:
+        dropped = history.pop(0)
+        total_chars -= len((dropped.get("content") or ""))
+
+
+def append_history_turn(history: List[Dict[str, str]], user_text: str, reply: str) -> None:
+    history.append({"role": "user", "content": user_text})
+    history.append({"role": "assistant", "content": reply})
+    trim_history(history)
+
+
+
+def set_last_stt_error(message: Optional[str]) -> None:
+    global _LAST_STT_ERROR
+    _LAST_STT_ERROR = message
+
+
+def get_last_stt_error() -> Optional[str]:
+    return _LAST_STT_ERROR
+
 
 def compute_rms(audio: np.ndarray) -> float:
     """Compute RMS amplitude for a chunk."""
@@ -158,6 +300,42 @@ def ensure_recommended_listen_window() -> None:
             "LISTEN_SECONDS=%s is outside recommended 5-10 second range.",
             LISTEN_SECONDS,
         )
+
+    if FOLLOWUP_LISTEN_SECONDS < 3 or FOLLOWUP_LISTEN_SECONDS > 12:
+        logger.warning(
+            "FOLLOWUP_LISTEN_SECONDS=%s is outside typical 3-12 second range.",
+            FOLLOWUP_LISTEN_SECONDS,
+        )
+
+    if MULTI_TURN_MAX_TURNS > 8:
+        logger.warning(
+            "MULTI_TURN_MAX_TURNS=%s is high and may increase latency/cost.",
+            MULTI_TURN_MAX_TURNS,
+        )
+
+
+
+def validate_runtime_config() -> bool:
+    """Return False for invalid runtime settings that should stop startup."""
+    valid = True
+
+    if SAMPLE_RATE <= 0:
+        logger.error("SAMPLE_RATE must be > 0 (got %s)", SAMPLE_RATE)
+        valid = False
+    if LISTEN_SECONDS <= 0:
+        logger.error("LISTEN_SECONDS must be > 0 (got %s)", LISTEN_SECONDS)
+        valid = False
+    if FOLLOWUP_LISTEN_SECONDS <= 0:
+        logger.error("FOLLOWUP_LISTEN_SECONDS must be > 0 (got %s)", FOLLOWUP_LISTEN_SECONDS)
+        valid = False
+    if HISTORY_MAX_MESSAGES < 2:
+        logger.error("HISTORY_MAX_MESSAGES must be >= 2 (got %s)", HISTORY_MAX_MESSAGES)
+        valid = False
+    if HISTORY_MAX_CHARS < 200:
+        logger.error("HISTORY_MAX_CHARS is too low (%s). Increase it to >= 200.", HISTORY_MAX_CHARS)
+        valid = False
+
+    return valid
 
 
 
@@ -264,6 +442,12 @@ def summarize_cli_failure_for_user(
             "Check executable permissions and try again."
         )
 
+    if "rate limit" in combined or "quota" in combined:
+        return (
+            f"{backend_name} hit a rate limit or quota. "
+            "Please retry shortly."
+        )
+
     logger.debug("%s non-zero return code=%s did not match known patterns.", backend_name, returncode)
     return f"Sorry, {backend_name} returned an error."
 
@@ -341,53 +525,65 @@ def load_vosk_model(model_path: str) -> vosk.Model:
 
 def wait_for_wake_phrase(model: vosk.Model) -> None:
     """Block until wake phrase is detected from live mic stream."""
-    recognizer = vosk.KaldiRecognizer(model, SAMPLE_RATE)
-    recognizer.SetWords(False)
 
-    logger.info("Listening for wake phrase: %r", WAKE_PHRASE)
-    with sd.RawInputStream(
-        samplerate=SAMPLE_RATE,
-        blocksize=CHUNK_SIZE,
-        dtype="int16",
-        channels=CHANNELS,
-    ) as stream:
-        while True:
-            raw, _overflow = stream.read(CHUNK_SIZE)
-            pcm = bytes(raw)
+    def _listen_until_wake() -> None:
+        recognizer = vosk.KaldiRecognizer(model, SAMPLE_RATE)
+        recognizer.SetWords(False)
 
-            if recognizer.AcceptWaveform(pcm):
-                res = json.loads(recognizer.Result())
-                text = normalize_text(res.get("text", ""))
-                logger.debug("Vosk final: %r", text)
-            else:
-                partial = json.loads(recognizer.PartialResult())
-                text = normalize_text(partial.get("partial", ""))
-                logger.debug("Vosk partial: %r", text)
+        logger.info("Listening for wake phrase: %r", WAKE_PHRASE)
+        with sd.RawInputStream(
+            samplerate=SAMPLE_RATE,
+            blocksize=CHUNK_SIZE,
+            dtype="int16",
+            channels=CHANNELS,
+        ) as stream:
+            while True:
+                raw, _overflow = stream.read(CHUNK_SIZE)
+                pcm = bytes(raw)
 
-            if WAKE_PHRASE and WAKE_PHRASE in text:
-                logger.info("Wake phrase detected.")
-                return
+                if recognizer.AcceptWaveform(pcm):
+                    res = json.loads(recognizer.Result())
+                    text = normalize_text(res.get("text", ""))
+                    logger.debug("Vosk final: %r", text)
+                else:
+                    partial = json.loads(recognizer.PartialResult())
+                    text = normalize_text(partial.get("partial", ""))
+                    logger.debug("Vosk partial: %r", text)
+
+                if WAKE_PHRASE and WAKE_PHRASE in text:
+                    logger.info("Wake phrase detected.")
+                    return
+
+    run_audio_with_retries("wake listener", _listen_until_wake)
 
 
 
-def record_audio(duration_s: int) -> np.ndarray:
+def record_audio(duration_s: int, label: str = "listen") -> np.ndarray:
     """Record mono int16 audio from default microphone."""
-    logger.info("Recording listen window: %ss", duration_s)
-    audio = sd.rec(
-        int(duration_s * SAMPLE_RATE),
-        samplerate=SAMPLE_RATE,
-        channels=CHANNELS,
-        dtype="int16",
-        blocking=True,
-    )
+    duration_s = max(1, int(duration_s))
 
-    if DEBUG_SAVE_AUDIO:
-        DEBUG_AUDIO_DIR.mkdir(parents=True, exist_ok=True)
-        path = DEBUG_AUDIO_DIR / f"capture_{int(time.time())}.wav"
-        sf.write(path.as_posix(), audio, SAMPLE_RATE, subtype="PCM_16")
-        logger.debug("Saved debug capture: %s", path)
+    def _capture() -> np.ndarray:
+        logger.info("Recording %s window: %ss", label, duration_s)
+        recorded = sd.rec(
+            int(duration_s * SAMPLE_RATE),
+            samplerate=SAMPLE_RATE,
+            channels=CHANNELS,
+            dtype="int16",
+            blocking=True,
+        )
 
-    return audio
+        if DEBUG_SAVE_AUDIO:
+            DEBUG_AUDIO_DIR.mkdir(parents=True, exist_ok=True)
+            path = DEBUG_AUDIO_DIR / f"capture_{label}_{int(time.time())}.wav"
+            sf.write(path.as_posix(), recorded, SAMPLE_RATE, subtype="PCM_16")
+            logger.debug("Saved debug capture: %s", path)
+
+        return recorded
+
+    audio = run_audio_with_retries(f"audio capture ({label})", _capture)
+    if isinstance(audio, np.ndarray):
+        return audio
+    raise TypeError("audio capture returned unexpected payload")
 
 
 
@@ -401,6 +597,7 @@ def transcribe_vosk_local(audio: np.ndarray, model: vosk.Model) -> str:
         recognizer.AcceptWaveform(raw[idx : idx + step])
 
     final = json.loads(recognizer.FinalResult())
+    set_last_stt_error(None)
     return (final.get("text") or "").strip()
 
 
@@ -408,6 +605,7 @@ def transcribe_vosk_local(audio: np.ndarray, model: vosk.Model) -> str:
 def transcribe_deepgram(audio: np.ndarray) -> str:
     if not DEEPGRAM_API_KEY:
         logger.error("DEEPGRAM_API_KEY is empty but STT_BACKEND=deepgram.")
+        set_last_stt_error("Deepgram API key is missing. Please update DEEPGRAM_API_KEY.")
         return ""
 
     wav_io = io.BytesIO()
@@ -436,40 +634,57 @@ def transcribe_deepgram(audio: np.ndarray) -> str:
         data = response.json()
         channels = data.get("results", {}).get("channels", [])
         if not channels:
+            set_last_stt_error(None)
             return ""
         alternatives = channels[0].get("alternatives", [])
         if not alternatives:
+            set_last_stt_error(None)
             return ""
+
+        set_last_stt_error(None)
         return (alternatives[0].get("transcript") or "").strip()
     except requests.exceptions.Timeout:
         logger.error("Deepgram STT timed out after %ss", DEEPGRAM_TIMEOUT)
+        set_last_stt_error("Deepgram transcription timed out. Please try again.")
         return ""
     except requests.exceptions.HTTPError as exc:
         status = exc.response.status_code if exc.response else "?"
         body = (exc.response.text[:240] if exc.response is not None else "")
         logger.error("Deepgram STT HTTP error %s: %s", status, body)
+
+        if status in (401, 403):
+            set_last_stt_error("Deepgram authentication failed. Please refresh the API key.")
+        elif status == 429:
+            set_last_stt_error("Deepgram rate limit reached. Please retry shortly.")
+        elif isinstance(status, int) and status >= 500:
+            set_last_stt_error("Deepgram is temporarily unavailable. Please try again shortly.")
+        else:
+            set_last_stt_error("Deepgram returned an STT error.")
         return ""
     except requests.exceptions.RequestException as exc:
         logger.error("Deepgram STT request failed: %s", exc)
+        set_last_stt_error("Deepgram network request failed. Check connection and retry.")
         return ""
     except (ValueError, KeyError, IndexError) as exc:
         logger.error("Deepgram STT response parse error: %s", exc)
+        set_last_stt_error("Deepgram response could not be parsed.")
         return ""
 
 
 
 def transcribe(audio: np.ndarray, model: vosk.Model) -> str:
     if STT_BACKEND == "vosk_local":
-        text = transcribe_vosk_local(audio, model)
+        text = sanitize_transcript(transcribe_vosk_local(audio, model))
         logger.info("Transcribed (vosk_local): %r", text)
         return text
 
     if STT_BACKEND == "deepgram":
-        text = transcribe_deepgram(audio)
+        text = sanitize_transcript(transcribe_deepgram(audio))
         logger.info("Transcribed (deepgram:%s): %r", DEEPGRAM_MODEL, text)
         return text
 
     logger.error("Unsupported STT_BACKEND=%r", STT_BACKEND)
+    set_last_stt_error("STT backend configuration is invalid.")
     return ""
 
 
@@ -548,9 +763,14 @@ def query_openclaw_api(user_text: str, history: List[Dict[str, str]]) -> str:
 
         response.raise_for_status()
         data = response.json()
-        reply = data["choices"][0]["message"]["content"].strip()
+        reply = (
+            data.get("choices", [{}])[0]
+            .get("message", {})
+            .get("content", "")
+            .strip()
+        )
         logger.info("LLM reply chars=%s", len(reply))
-        return reply or ""
+        return reply or EMPTY_BACKEND_REPLY
 
     except requests.exceptions.Timeout:
         logger.error("LLM request timed out after %ss", LLM_TIMEOUT)
@@ -559,6 +779,18 @@ def query_openclaw_api(user_text: str, history: List[Dict[str, str]]) -> str:
         status = exc.response.status_code if exc.response else "?"
         body = (exc.response.text[:240] if exc.response is not None else "")
         logger.error("LLM HTTP error %s: %s", status, body)
+
+        if status in (401, 403):
+            return "Model API authentication failed. Please refresh your API key."
+        if status == 404:
+            return "Model API endpoint or model name looks invalid."
+        if status == 408:
+            return "Model API timed out before responding."
+        if status == 429:
+            return "Model API rate limit reached. Please retry in a moment."
+        if isinstance(status, int) and status >= 500:
+            return "Model API is temporarily unavailable. Please try again shortly."
+
         return "Sorry, the model API returned an error."
     except (KeyError, IndexError, ValueError) as exc:
         logger.error("Unexpected API response format: %s", exc)
@@ -632,6 +864,101 @@ def query_cli_backend(
 
 
 # ---------------------------------------------------------------------------
+# Session orchestration
+# ---------------------------------------------------------------------------
+
+
+def handle_wake_session(model: vosk.Model, tts: "BargeInTTS", history: List[Dict[str, str]]) -> None:
+    """Run one wake-initiated interaction session (single-turn or multi-turn)."""
+    max_turns = MULTI_TURN_MAX_TURNS if MULTI_TURN_ENABLED else 1
+    completed_turns = 0
+    initial_no_speech_count = 0
+    followup_no_speech_count = 0
+    wake_only_count = 0
+
+    while completed_turns < max_turns:
+        is_followup = completed_turns > 0
+
+        if is_followup:
+            logger.info(
+                "Opening multi-turn follow-up window: %ss (turn %s/%s)",
+                FOLLOWUP_LISTEN_SECONDS,
+                completed_turns + 1,
+                max_turns,
+            )
+            if FOLLOWUP_PROMPT:
+                tts.speak(FOLLOWUP_PROMPT, allow_barge_in=False)
+            audio = record_audio(
+                FOLLOWUP_LISTEN_SECONDS,
+                label=f"followup{completed_turns}",
+            )
+        else:
+            tts.speak(LISTEN_ACK, allow_barge_in=False)
+            audio = record_audio(LISTEN_SECONDS, label="listen")
+
+        user_text = transcribe(audio, model)
+
+        if not user_text:
+            stt_error = get_last_stt_error()
+            if stt_error:
+                logger.info("STT error encountered during %s turn: %s", "follow-up" if is_followup else "initial", stt_error)
+                tts.speak(stt_error, allow_barge_in=False)
+                return
+
+            if is_followup:
+                followup_no_speech_count += 1
+                logger.info(
+                    "No speech detected in follow-up window (%s/%s).",
+                    followup_no_speech_count,
+                    NO_SPEECH_RETRY_LIMIT + 1,
+                )
+                if followup_no_speech_count > NO_SPEECH_RETRY_LIMIT:
+                    end_prompt = SESSION_END_PROMPT or FOLLOWUP_TIMEOUT_PROMPT
+                    if end_prompt:
+                        tts.speak(end_prompt, allow_barge_in=False)
+                    return
+
+                if FOLLOWUP_NO_SPEECH_PROMPT:
+                    tts.speak(FOLLOWUP_NO_SPEECH_PROMPT, allow_barge_in=False)
+                continue
+
+            initial_no_speech_count += 1
+            tts.speak(NO_SPEECH_PROMPT, allow_barge_in=False)
+            if initial_no_speech_count > NO_SPEECH_RETRY_LIMIT:
+                return
+            continue
+
+        initial_no_speech_count = 0
+        followup_no_speech_count = 0
+
+        if is_wake_only_transcript(user_text):
+            wake_only_count += 1
+            logger.info(
+                "Transcript contained only wake phrase (%s/%s).",
+                wake_only_count,
+                WAKE_ONLY_RETRY_LIMIT + 1,
+            )
+            tts.speak(WAKE_ONLY_PROMPT, allow_barge_in=False)
+            if wake_only_count > WAKE_ONLY_RETRY_LIMIT:
+                return
+            continue
+
+        wake_only_count = 0
+
+        reply = (query_backend(user_text, history) or "").strip() or EMPTY_BACKEND_REPLY
+        append_history_turn(history, user_text, reply)
+
+        completed = tts.speak(reply, allow_barge_in=True)
+        if not completed:
+            logger.info("Reply interrupted by user barge-in.")
+
+        completed_turns += 1
+
+    if SESSION_END_PROMPT:
+        tts.speak(SESSION_END_PROMPT, allow_barge_in=False)
+
+
+# ---------------------------------------------------------------------------
 # TTS with barge-in
 # ---------------------------------------------------------------------------
 
@@ -666,7 +993,16 @@ class BargeInTTS:
         thread.start()
 
         if not allow_barge_in:
-            thread.join(timeout=max(1.0, len(text) * 0.08))
+            timeout_s = max(2.0, min(15.0, len(text) * 0.11))
+            finished = self._done_event.wait(timeout=timeout_s)
+            if not finished:
+                logger.warning("TTS playback exceeded %.1fs timeout; forcing stop.", timeout_s)
+                if self._engine is not None:
+                    try:
+                        self._engine.stop()  # type: ignore[union-attr]
+                    except Exception:
+                        pass
+            thread.join(timeout=1.0)
             return True
 
         required_frames = max(1, int(BARGE_IN_HOLD_MS / (CHUNK_DURATION_S * 1000)))
@@ -716,6 +1052,13 @@ class BargeInTTS:
             logger.warning("Barge-in monitor error: %s", exc)
 
         thread.join(timeout=2.0)
+        if thread.is_alive() and self._engine is not None:
+            try:
+                self._engine.stop()  # type: ignore[union-attr]
+            except Exception:
+                pass
+            thread.join(timeout=1.0)
+
         return not interrupted
 
 
@@ -735,7 +1078,22 @@ def print_startup_banner() -> None:
     logger.info("Thinking   : %s", THINKING_LEVEL)
     logger.info("Wake phrase: %r", WAKE_PHRASE)
     logger.info("Listen ack : %r", LISTEN_ACK)
+    if FOLLOWUP_PROMPT:
+        logger.info("Follow-up  : %r", FOLLOWUP_PROMPT)
     logger.info("Listen win : %ss", LISTEN_SECONDS)
+    logger.info(
+        "Multi-turn : %s (max=%s turns, follow-up=%ss)",
+        "on" if MULTI_TURN_ENABLED else "off",
+        MULTI_TURN_MAX_TURNS,
+        FOLLOWUP_LISTEN_SECONDS,
+    )
+    logger.info(
+        "Retries    : no-speech=%s wake-only=%s audio=%s",
+        NO_SPEECH_RETRY_LIMIT,
+        WAKE_ONLY_RETRY_LIMIT,
+        AUDIO_RETRY_ATTEMPTS,
+    )
+    logger.info("History    : %s msgs / %s chars", HISTORY_MAX_MESSAGES, HISTORY_MAX_CHARS)
     logger.info("Audio chunk: %.2fs", CHUNK_DURATION_S)
     logger.info("Barge-in   : rms>%.3f hold=%sms", BARGE_IN_THRESHOLD, BARGE_IN_HOLD_MS)
     if ASSISTANT_BACKEND == "openclaw_api":
@@ -762,6 +1120,9 @@ def main() -> None:
         )
         return
 
+    if not validate_runtime_config():
+        return
+
     ensure_recommended_listen_window()
     print_startup_banner()
 
@@ -774,31 +1135,8 @@ def main() -> None:
             # 1) Wait for wake phrase
             wait_for_wake_phrase(model)
 
-            # 2) Quick acknowledgement (not interruptible)
-            tts.speak(LISTEN_ACK, allow_barge_in=False)
-
-            # 3) Listen window (default 7s)
-            audio = record_audio(LISTEN_SECONDS)
-
-            # 4) Local transcription
-            user_text = transcribe(audio, model)
-            if not user_text:
-                tts.speak("I didn't catch that.", allow_barge_in=False)
-                continue
-
-            # 5) Route to selected backend
-            reply = query_backend(user_text, history)
-
-            # 6) Update rolling context
-            history.append({"role": "user", "content": user_text})
-            history.append({"role": "assistant", "content": reply})
-            if len(history) > HISTORY_MAX_MESSAGES:
-                history = history[-HISTORY_MAX_MESSAGES:]
-
-            # 7) Speak reply (interruptible)
-            completed = tts.speak(reply, allow_barge_in=True)
-            if not completed:
-                logger.info("Reply interrupted by user barge-in.")
+            # 2) Handle one wake-triggered interaction session
+            handle_wake_session(model, tts, history)
 
         except KeyboardInterrupt:
             logger.info("KeyboardInterrupt received; shutting down.")
