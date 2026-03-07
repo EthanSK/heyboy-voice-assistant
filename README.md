@@ -202,6 +202,14 @@ If unsupported by backend, it auto-retries without those fields.
 scripts/heyboy setup codex
 ```
 
+`heyboy doctor` now runs an active Codex auth probe when `ASSISTANT_BACKEND=codex_cli`.
+If your token is stale/reused, it reports:
+
+- `Codex CLI auth invalid/expired — run: codex logout && codex login`
+
+Runtime responses now surface this remediation directly instead of only saying
+`Codex CLI returned an error`.
+
 ### Claude Code CLI path
 
 ```bash
