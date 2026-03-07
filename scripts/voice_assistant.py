@@ -16,6 +16,7 @@ Pipeline:
 
 from __future__ import annotations
 
+import atexit
 import json
 import logging
 import os
@@ -36,6 +37,9 @@ import sounddevice as sd
 import soundfile as sf
 import vosk
 from dotenv import load_dotenv
+
+if os.name == "posix":
+    import fcntl
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -87,6 +91,7 @@ BARGE_IN_GRACE_MS = int(os.getenv("BARGE_IN_GRACE_MS", "350"))
 HISTORY_MAX_MESSAGES = int(os.getenv("HISTORY_MAX_MESSAGES", "20"))
 DEBUG_SAVE_AUDIO = os.getenv("DEBUG_SAVE_AUDIO", "0") == "1"
 DEBUG_AUDIO_DIR = Path(os.getenv("DEBUG_AUDIO_DIR", "tmp/audio"))
+INSTANCE_LOCK_PATH = os.getenv("INSTANCE_LOCK_PATH", "/tmp/heyboy-voice-assistant.lock")
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -242,6 +247,57 @@ def summarize_cli_failure_for_user(
 
     logger.debug("%s non-zero return code=%s did not match known patterns.", backend_name, returncode)
     return f"Sorry, {backend_name} returned an error."
+
+
+# ---------------------------------------------------------------------------
+# Single-instance lock
+# ---------------------------------------------------------------------------
+
+_INSTANCE_LOCK_HANDLE = None
+
+
+def release_instance_lock() -> None:
+    global _INSTANCE_LOCK_HANDLE
+
+    if _INSTANCE_LOCK_HANDLE is None:
+        return
+
+    try:
+        if os.name == "posix":
+            fcntl.flock(_INSTANCE_LOCK_HANDLE.fileno(), fcntl.LOCK_UN)
+    except Exception:
+        logger.debug("Failed to unlock instance file cleanly", exc_info=True)
+    finally:
+        try:
+            _INSTANCE_LOCK_HANDLE.close()
+        except Exception:
+            logger.debug("Failed to close instance lock file", exc_info=True)
+        _INSTANCE_LOCK_HANDLE = None
+
+
+def acquire_instance_lock() -> bool:
+    """Ensure only one heyboy runtime is active at a time."""
+    global _INSTANCE_LOCK_HANDLE
+
+    if os.name != "posix":
+        return True
+
+    try:
+        _INSTANCE_LOCK_HANDLE = open(INSTANCE_LOCK_PATH, "w")
+        fcntl.flock(_INSTANCE_LOCK_HANDLE.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        _INSTANCE_LOCK_HANDLE.write(str(os.getpid()))
+        _INSTANCE_LOCK_HANDLE.flush()
+        atexit.register(release_instance_lock)
+        return True
+    except BlockingIOError:
+        logger.error(
+            "Another heyboy instance is already running (lock: %s). Exiting.",
+            INSTANCE_LOCK_PATH,
+        )
+        return False
+    except Exception:
+        logger.exception("Failed to acquire instance lock; exiting for safety.")
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -598,6 +654,9 @@ def print_startup_banner() -> None:
 
 
 def main() -> None:
+    if not acquire_instance_lock():
+        return
+
     ensure_recommended_listen_window()
     print_startup_banner()
 
