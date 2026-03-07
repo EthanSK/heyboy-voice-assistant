@@ -25,7 +25,7 @@ Always-on wake listener (Vosk streaming)
 Listen window recorder (default 7s)
    │
    ▼
-Offline transcription (Vosk)
+Offline/Deepgram transcription
    │ transcript text
    ▼
 Backend router
@@ -37,7 +37,8 @@ Backend router
    ▼
 TTS speaker (pyttsx3) + barge-in monitor (mic RMS)
    │
-   └─ if user starts speaking while TTS is active -> stop playback immediately
+   ├─ if user starts speaking while TTS is active -> stop playback immediately
+   └─ if multi-turn enabled -> open follow-up capture window (no new wake word)
 ```
 
 ---
@@ -55,12 +56,15 @@ Why this default:
 - runs locally
 - no cloud call needed
 - practical for early scaffold
+- transient audio open/capture failures are retried with backoff
 
 ## 2) Listen window capture
 
 - fixed duration from `LISTEN_SECONDS` (recommended 5–10s)
 - default is **7s**
 - captured as int16 mono audio buffer
+- when `MULTI_TURN_ENABLED=1`, follow-up turns use `FOLLOWUP_LISTEN_SECONDS`
+  without requiring the wake phrase again
 
 ## 3) Local STT
 
