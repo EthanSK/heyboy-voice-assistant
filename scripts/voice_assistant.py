@@ -53,6 +53,7 @@ ASSISTANT_BACKEND = os.getenv("ASSISTANT_BACKEND", "openclaw_api").strip().lower
 
 # Wake/listen
 WAKE_PHRASE_RAW = os.getenv("WAKE_PHRASE", "hey boy")
+LISTEN_ACK = os.getenv("LISTEN_ACK", "Hi, I'm listening.")
 LISTEN_SECONDS = int(os.getenv("LISTEN_SECONDS", os.getenv("RECORD_SECONDS", "7")))
 SAMPLE_RATE = int(os.getenv("SAMPLE_RATE", "16000"))
 CHANNELS = 1
@@ -733,6 +734,7 @@ def print_startup_banner() -> None:
     logger.info("Model      : %s", MODEL_NAME)
     logger.info("Thinking   : %s", THINKING_LEVEL)
     logger.info("Wake phrase: %r", WAKE_PHRASE)
+    logger.info("Listen ack : %r", LISTEN_ACK)
     logger.info("Listen win : %ss", LISTEN_SECONDS)
     logger.info("Audio chunk: %.2fs", CHUNK_DURATION_S)
     logger.info("Barge-in   : rms>%.3f hold=%sms", BARGE_IN_THRESHOLD, BARGE_IN_HOLD_MS)
@@ -773,7 +775,7 @@ def main() -> None:
             wait_for_wake_phrase(model)
 
             # 2) Quick acknowledgement (not interruptible)
-            tts.speak("Yes?", allow_barge_in=False)
+            tts.speak(LISTEN_ACK, allow_barge_in=False)
 
             # 3) Listen window (default 7s)
             audio = record_audio(LISTEN_SECONDS)
