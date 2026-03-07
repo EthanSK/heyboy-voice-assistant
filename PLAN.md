@@ -98,3 +98,17 @@ Config/rule files updated:
 - Fixed installer model download fallback (primary URL failure now auto-falls back to HuggingFace mirror).
 - Added Homebrew tap workflow and validated dry-run install command.
 - Committed and pushed updates on top of e0ec36a -> 2069c9f."
+
+### [2026-03-07 00:43 Europe/London] User
+"Oh, there's no built in or end to end or Open skill? We should make one. We should make the CLI of this into one. Can Open Claw skills just be CLI tools? Instructions to install if it doesn't exist and use it, put it into the path. Mac and ideally Windows, but I don't have Windows to test it on, so we can only test it on Mac for now. Also, have you checked the UI works and everything? Also okay. Look. I haven't checked the project yet, but you did it in Swift. I want it to be cross platform with Electron, with TypeScript. Look at the existing Okay. Keep the Swift MVP there. I'll test it later. But I have an existing project somewhere in my home folder, my projects folder, on the computer. Look at it for Electron advice and guidance and also AI music video studio for like rough guidance on how to set up the mono repo and style guides and types, etcetera. So, yeah, do a sub agent for that. Obviously, because it's a long running app, you should automatically be doing sub agents for this. I already told you in the past to do that."
+
+### [2026-03-07 00:51 Europe/London] User
+"That is the CLI that is. And, also, make end to end tests running and all that. Also, how was the status of the other agents?"
+
+### [2026-03-07 00:51 Europe/London] Assistant
+"In-progress implementation update:
+- Added OpenClaw-skill-style package folder under `skills/heyboy-voice-assistant/` with SKILL.md + references.
+- Added Windows best-effort scripts (`scripts/install.ps1`, `scripts/install_part1_deps.ps1`, `scripts/heyboy.ps1`) and docs marking untested status.
+- Added practical E2E smoke+integration test harness for macOS (`scripts/tests/e2e_smoke_macos.sh`) plus deterministic test backend (`scripts/tests/smoke_backend.py`).
+- Updated README/docs with exact E2E commands, validation status, and explicit UI verification boundaries.
+- Running local E2E smoke now and capturing artifacts under `artifacts/e2e/<timestamp>/`."

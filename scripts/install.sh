@@ -32,15 +32,31 @@ scripts/heyboy install
 mkdir -p "$BIN_DIR"
 ln -sf "$INSTALL_ROOT/scripts/heyboy" "$BIN_DIR/heyboy"
 
+path_contains_bin=0
+case ":$PATH:" in
+  *":$BIN_DIR:"*) path_contains_bin=1 ;;
+esac
+
 echo ""
 echo "Installed ✅"
 echo "Binary linked: $BIN_DIR/heyboy"
+
+if [ "$path_contains_bin" -eq 0 ]; then
+  echo ""
+  echo "PATH setup needed in this shell. Add:"
+  echo "  export PATH=\"$BIN_DIR:\$PATH\""
+  echo ""
+  echo "Persist for zsh:"
+  echo "  echo 'export PATH=\"$BIN_DIR:\$PATH\"' >> ~/.zshrc"
+  echo "  echo 'export PATH=\"$BIN_DIR:\$PATH\"' >> ~/.zprofile"
+fi
+
 echo ""
 echo "Next:"
 echo "  heyboy setup openclaw --api-key \"YOUR_TOKEN\""
 echo "  heyboy doctor"
 echo "  heyboy run"
 echo ""
-echo "For app/daemon mode:"
+echo "For app/daemon mode (macOS):"
 echo "  heyboy app install"
 echo "  heyboy app start"

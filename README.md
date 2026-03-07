@@ -1,4 +1,4 @@
-# heyboy voice assistant
+# heyboy-voice-assistant
 
 **Works with any of your AI subscriptions.**
 
@@ -6,7 +6,7 @@ A local-first voice assistant scaffold that wakes on **"hey boy"**, records a sh
 
 ---
 
-## Features (Part 1)
+## Features (current)
 
 - Always-on wake phrase detection (`hey boy`) via **Vosk**
 - 5–10s listen window (default `7s`)
@@ -17,12 +17,13 @@ A local-first voice assistant scaffold that wakes on **"hey boy"**, records a sh
   - `claude_cli`
   - `generic_cli`
 - Barge-in interruption while assistant is speaking
-- OpenClaw-style helper CLI: `scripts/heyboy`
+- OpenClaw-style helper CLI: `heyboy` / `scripts/heyboy`
 - macOS app/daemon mode with LaunchAgent
+- OpenClaw-skill-style wrapper under `skills/heyboy-voice-assistant/`
 
 ---
 
-## Quick start
+## Quick start (macOS tested)
 
 ```bash
 scripts/heyboy install
@@ -33,9 +34,9 @@ scripts/heyboy run
 
 ---
 
-## One-command-ish install options
+## Install options
 
-## 1) Curl installer
+### 1) Curl installer
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/EthanSK/heyboy-voice-assistant/main/scripts/install.sh | bash
@@ -49,7 +50,15 @@ heyboy doctor
 heyboy run
 ```
 
-## 2) Homebrew (interim tap + formula)
+If `heyboy` is not found in a new shell, add `~/.local/bin` to PATH:
+
+```bash
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zprofile
+source ~/.zshrc
+```
+
+### 2) Homebrew (interim tap + formula)
 
 ```bash
 brew tap EthanSK/heyboy-voice-assistant https://github.com/EthanSK/heyboy-voice-assistant
@@ -59,6 +68,47 @@ heyboy setup openclaw --api-key "YOUR_TOKEN"
 heyboy doctor
 heyboy run
 ```
+
+### 3) Windows PowerShell (best-effort, untested)
+
+```powershell
+iwr https://raw.githubusercontent.com/EthanSK/heyboy-voice-assistant/main/scripts/install.ps1 -UseBasicParsing | iex
+```
+
+Then:
+
+```powershell
+heyboy setup openclaw --api-key "YOUR_TOKEN"
+heyboy doctor
+heyboy run
+```
+
+Windows notes/limitations: [docs/WINDOWS.md](docs/WINDOWS.md)
+
+---
+
+## OpenClaw skill wrapper
+
+Skill path in this repo:
+
+- `skills/heyboy-voice-assistant/SKILL.md`
+
+Install skill into local OpenClaw workspace:
+
+```bash
+mkdir -p ~/.openclaw/workspace/skills
+cp -R skills/heyboy-voice-assistant ~/.openclaw/workspace/skills/
+```
+
+Build distributable `.skill` archive:
+
+```bash
+scripts/package_openclaw_skill.sh
+```
+
+Output:
+
+- `artifacts/heyboy-voice-assistant.skill`
 
 ---
 
@@ -87,6 +137,46 @@ Logs:
 
 - `~/Library/Logs/heyboy-voice-assistant/stdout.log`
 - `~/Library/Logs/heyboy-voice-assistant/stderr.log`
+
+---
+
+## Practical E2E/smoke tests
+
+Run macOS smoke+integration coverage now:
+
+```bash
+scripts/tests/e2e_smoke_macos.sh
+```
+
+Headless macOS mode (allow daemon step skip):
+
+```bash
+HEYBOY_ALLOW_DAEMON_SKIP=1 scripts/tests/e2e_smoke_macos.sh
+```
+
+Artifacts produced per run:
+
+- `artifacts/e2e/<timestamp>/summary.txt`
+- `artifacts/e2e/<timestamp>/summary.json`
+- per-step logs (`01-install.log`, `03-doctor.log`, `06-app-status.log`, `08-run-loop.log`, ...)
+
+---
+
+## Validation status (current)
+
+Tested in this repo on macOS:
+
+- ✅ CLI install/setup/doctor flow
+- ✅ foreground run-loop startup
+- ✅ LaunchAgent lifecycle (`app install/start/status/stop`)
+- ✅ practical smoke+integration script (`scripts/tests/e2e_smoke_macos.sh`)
+
+Not yet manually UI-verified in this run:
+
+- ❌ No desktop GUI/Electron/Swift interface click-through QA
+- ❌ Windows runtime/manual verification (docs/scripts only)
+
+See: [docs/VALIDATION_STATUS.md](docs/VALIDATION_STATUS.md)
 
 ---
 
@@ -126,29 +216,14 @@ scripts/heyboy setup generic --command "ollama run llama3.2"
 
 ---
 
-## Smoke test commands actually executed (2026-03-07)
-
-```bash
-scripts/heyboy install
-scripts/heyboy setup generic --command "python3 -c \"import sys; print('SMOKE BACKEND OK')\""
-scripts/heyboy doctor
-scripts/heyboy app start
-scripts/heyboy app status
-scripts/heyboy app stop
-scripts/heyboy run   # observed startup + wake-listen loop logs for ~10s
-```
-
-Proof screenshot saved at:
-
-- `/Users/ethansk/.openclaw/workspace/artifacts/heyboy-voice-proof.png`
-
----
-
 ## Docs
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 - [docs/PART1_IMPLEMENTATION.md](docs/PART1_IMPLEMENTATION.md)
 - [docs/DISTRIBUTION.md](docs/DISTRIBUTION.md)
+- [docs/OPENCLAW_SKILL.md](docs/OPENCLAW_SKILL.md)
+- [docs/WINDOWS.md](docs/WINDOWS.md)
+- [docs/VALIDATION_STATUS.md](docs/VALIDATION_STATUS.md)
 - [PLAN.md](PLAN.md) (canonical append-only project conversation log)
 
 ---

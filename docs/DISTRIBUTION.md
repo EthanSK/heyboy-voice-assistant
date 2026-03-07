@@ -11,7 +11,7 @@ Make **heyboy-voice-assistant** downloadable and easy to run out of the box as:
 
 ## Fast install paths
 
-## A) One-command curl installer (recommended for Git users)
+## A) One-command curl installer (recommended for macOS/Linux Git users)
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/EthanSK/heyboy-voice-assistant/main/scripts/install.sh | bash
@@ -46,6 +46,40 @@ heyboy setup openclaw --api-key "YOUR_TOKEN"
 heyboy doctor
 heyboy run
 ```
+
+## D) Windows PowerShell (best-effort, untested)
+
+```powershell
+iwr https://raw.githubusercontent.com/EthanSK/heyboy-voice-assistant/main/scripts/install.ps1 -UseBasicParsing | iex
+```
+
+Then:
+
+```powershell
+heyboy setup openclaw --api-key "YOUR_TOKEN"
+heyboy doctor
+heyboy run
+```
+
+Windows limitations are documented in `docs/WINDOWS.md`.
+
+---
+
+## OpenClaw skill wrapper packaging
+
+Skill source in repo:
+
+- `skills/heyboy-voice-assistant/SKILL.md`
+
+Package distributable archive:
+
+```bash
+scripts/package_openclaw_skill.sh
+```
+
+Archive output:
+
+- `artifacts/heyboy-voice-assistant.skill`
 
 ---
 
