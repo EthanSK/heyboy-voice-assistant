@@ -1,179 +1,172 @@
-# Architecture — openclaw heyboy voice assistant
+# Architecture — heyboy voice assistant
 
-## Overview
+## Product intent
 
-heyboy is a local-first voice assistant pipeline.  Every stage from wake-word detection through speech recognition runs **on-device** with no network round-trips.  Only the LLM inference step calls an external (or self-hosted) API.
+**Works with any of your AI subscriptions.**
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                         heyboy pipeline                         │
-│                                                                 │
-│  Microphone                                                     │
-│      │                                                          │
-│      ▼                                                          │
-│  ┌──────────────────────────┐                                   │
-│  │  Always-on wake listener  │  sounddevice raw stream          │
-│  │  (vosk KaldiRecogniser)  │  100 ms chunks @ 16 kHz mono     │
-│  └──────────────┬───────────┘                                   │
-│                 │ "hey boy" detected                            │
-│                 ▼                                               │
-│  ┌──────────────────────────┐                                   │
-│  │  Audio recorder          │  sd.rec() 7 s blocking           │
-│  └──────────────┬───────────┘                                   │
-│                 │ int16 numpy array                             │
-│                 ▼                                               │
-│  ┌──────────────────────────┐                                   │
-│  │  Local STT (vosk)        │  KaldiRecogniser FinalResult      │
-│  └──────────────┬───────────┘                                   │
-│                 │ transcript string                             │
-│                 ▼                                               │
-│  ┌──────────────────────────┐   HTTPS POST /v1/chat/completions │
-│  │  LLM client (requests)   │ ─────────────────────────────►   │
-│  │  Bearer token auth       │ ◄─────────────────────────────   │
-│  └──────────────┬───────────┘   JSON response                  │
-│                 │ reply string                                  │
-│                 ▼                                               │
-│  ┌──────────────────────────┐                                   │
-│  │  TTS + barge-in monitor  │  pyttsx3 (daemon thread)         │
-│  │  (BargeInTTS)            │  + sd.InputStream RMS check       │
-│  └──────────────────────────┘                                   │
-│      │                                                          │
-│      ▼                                                          │
-│  Speakers / headphones                                          │
-└─────────────────────────────────────────────────────────────────┘
+The core design is local-first for voice processing, with pluggable response backends.
+
+- local wake phrase detection (`hey boy`)
+- local recording + transcription
+- backend router that can hit API or local CLIs
+- local TTS with interruption/barge-in support
+
+---
+
+## System diagram
+
+```text
+Microphone
+   │
+   ▼
+Always-on wake listener (Vosk streaming)
+   │ wake phrase detected
+   ▼
+Listen window recorder (default 7s)
+   │
+   ▼
+Offline transcription (Vosk)
+   │ transcript text
+   ▼
+Backend router
+   ├── openclaw_api  -> POST /v1/chat/completions (Bearer token)
+   ├── codex_cli     -> codex exec "...prompt..."
+   ├── claude_cli    -> claude --dangerously-skip-permissions --print "...prompt..."
+   └── generic_cli   -> user-defined command prefix
+   │ response text
+   ▼
+TTS speaker (pyttsx3) + barge-in monitor (mic RMS)
+   │
+   └─ if user starts speaking while TTS is active -> stop playback immediately
 ```
 
 ---
 
-## Component breakdown
+## Runtime components
 
-### 1. Wake-phrase listener
+## 1) Wake phrase detector
 
-- **Library:** `vosk` + `sounddevice`
-- Streams raw PCM (int16, 16 kHz, mono) in 100 ms blocks.
-- A `KaldiRecogniser` decodes partial and final hypotheses.
-- The wake phrase is checked as a substring match against the lowercased hypothesis text — simple but effective for a fixed phrase.
-- CPU usage: ~5–15 % on a modern laptop with the small English model.
+- Input: microphone stream (`sounddevice.RawInputStream`)
+- Decoder: `vosk.KaldiRecognizer`
+- Match logic: normalized substring check for `WAKE_PHRASE`
+- Default sample rate: `16kHz`
 
-### 2. Audio recorder
+Why this default:
+- runs locally
+- no cloud call needed
+- practical for early scaffold
 
-- **Library:** `sounddevice.rec()` (blocking)
-- Records exactly `RECORD_SECONDS` (default 7) seconds after wake.
-- Returns a mono int16 numpy array.
-- Future improvement: voice-activity detection to stop early on silence.
+## 2) Listen window capture
 
-### 3. Local speech-to-text
+- fixed duration from `LISTEN_SECONDS` (recommended 5–10s)
+- default is **7s**
+- captured as int16 mono audio buffer
 
-- **Library:** `vosk`
-- Re-uses the same loaded `vosk.Model`; creates a fresh `KaldiRecogniser` per utterance.
-- PCM bytes fed in 0.25 s steps; `FinalResult()` called after all bytes consumed.
-- Entirely offline — no data leaves the device.
+## 3) Local STT
 
-### 4. LLM client
+- same Vosk model reused for post-wake transcript
+- no cloud dependency for transcription
 
-- **Library:** `requests`
-- Targets any OpenAI-compatible `/v1/chat/completions` endpoint.
-- Auth: `Authorization: Bearer <API_KEY>` header.
-- Low-thinking config: `temperature=0.3`, `top_p=0.9`, `max_tokens=512`.
-- Sends a rolling conversation history (configurable window, default last 20 messages).
-- Handles timeout, HTTP errors, and malformed responses gracefully.
+## 4) Backend router
 
-### 5. TTS with barge-in
+The router supports 4 compatibility targets:
 
-- **Library:** `pyttsx3` (TTS) + `sounddevice.InputStream` (barge-in monitor)
-- pyttsx3 runs in a daemon thread; `engine.runAndWait()` blocks until speech ends.
-- Simultaneously, the main thread opens a mic `InputStream` and computes RMS each chunk.
-- If `RMS > BARGE_IN_THRESHOLD`, `engine.stop()` is called and the thread is joined.
-- `speak()` returns `True` (completed) or `False` (interrupted).
+### A) `openclaw_api` (default)
+
+- OpenAI-compatible API call via `requests`
+- endpoint: `{API_BASE_URL}/v1/chat/completions`
+- auth: `Bearer API_KEY`
+- default model: `gpt-5.2`
+- low-thinking path defaults:
+  - `THINKING_LEVEL=low`
+  - `LLM_TEMPERATURE=0.2`
+
+Request includes both compatibility forms when supported:
+- `reasoning: { effort: low }`
+- `reasoning_effort: low`
+
+If backend rejects these fields, request auto-retries without them.
+
+### B) `codex_cli`
+
+Runs local Codex CLI command, default:
+- `codex exec`
+
+### C) `claude_cli`
+
+Runs local Claude Code CLI command, default:
+- `claude --dangerously-skip-permissions --print`
+
+### D) `generic_cli`
+
+Runs user-defined command prefix (e.g. Ollama or any other compatible local CLI).
+
+## 5) TTS + barge-in
+
+- playback with `pyttsx3`
+- concurrent mic monitor computes RMS
+- barge-in triggers when RMS exceeds threshold for configurable hold period
+
+Config:
+- `BARGE_IN_THRESHOLD`
+- `BARGE_IN_HOLD_MS`
+- `BARGE_IN_GRACE_MS`
+
+This reduces false interruptions from speaker bleed while still allowing quick user interruption.
 
 ---
 
-## Data flow — sequence diagram
+## CLI UX layer
 
-```
-User          Mic           heyboy                     LLM API
- │             │              │                            │
- │  "hey boy"  │              │                            │
- │────────────►│  raw PCM     │                            │
- │             │─────────────►│ vosk partial match         │
- │             │              │──────┐                     │
- │             │              │ wake │                     │
- │             │              │◄─────┘                     │
- │             │◄─────────────│ TTS "Yes?"                 │
- │  utterance  │              │                            │
- │────────────►│ 7 s record   │                            │
- │             │─────────────►│                            │
- │             │              │ vosk transcribe             │
- │             │              │──────┐                     │
- │             │              │ text │                     │
- │             │              │◄─────┘                     │
- │             │              │── POST /v1/chat/completions►│
- │             │              │◄─────────────── reply ─────│
- │             │◄─────────────│ TTS reply                  │
- │  (speaks)   │ mic RMS mon. │                            │
- │────────────►│─────────────►│ barge-in? stop TTS         │
-```
+`scripts/heyboy` provides a simple command model inspired by OpenClaw ergonomics:
+
+- `scripts/heyboy install`
+- `scripts/heyboy setup <backend>`
+- `scripts/heyboy doctor`
+- `scripts/heyboy run`
+- `scripts/heyboy quickstart <backend>`
+
+This keeps setup minimal for different user environments.
+
+## macOS app/daemon layer
+
+For always-on operation, `scripts/heyboy app ...` manages a LaunchAgent:
+
+- label: `io.github.ethansk.heyboy.voice-assistant`
+- plist: `~/Library/LaunchAgents/io.github.ethansk.heyboy.voice-assistant.plist`
+- stdout/stderr logs in `~/Library/Logs/heyboy-voice-assistant/`
+
+This gives app-like behavior (launch-at-login + keepalive) while still using the same core Python runtime.
+
+## Download/distribution layer
+
+Current practical download paths:
+
+- `scripts/install.sh` (curl installer)
+- git clone + `scripts/heyboy install`
+- Homebrew HEAD formula (`Formula/heyboy-voice-assistant.rb`)
+
+A notarized `.app` bundle + Homebrew cask can be added in Part 2 once signing/notarization pipeline is ready.
 
 ---
 
-## Alternative technology choices
+## Chosen defaults + alternatives
 
-The table below lists drop-in alternatives for each pipeline stage, with trade-offs.
+### Wake-word alternatives
 
-### Wake-word detection alternatives
-
-| Technology | Type | Pros | Cons |
-|---|---|---|---|
-| **vosk** (current) | Offline full ASR | No registration, free, flexible phrase | Higher CPU than dedicated detectors; substring match can false-positive |
-| **Porcupine** (Picovoice) | Offline, dedicated wake-word | Very low CPU (~1 %), low false-accept, custom wake-word training available | Requires Picovoice account + free-tier API key; commercial use requires license |
-| **openWakeWord** | Offline, open-source DNN | Truly open (Apache 2), custom phrase training via transfer learning, good accuracy | Requires PyTorch; model training pipeline needed for custom phrases |
-| **Deepgram** | Cloud streaming STT with keyword trigger | High accuracy, built-in keyword spotting, real-time | Requires internet + Deepgram account; latency depends on network; cost per minute |
-| **Whisper** | Offline ASR (OpenAI) | Excellent multilingual accuracy | Too slow for real-time streaming on CPU; better suited for batch transcription |
-| **Snowboy** | Offline, dedicated wake-word | Very low CPU | Unmaintained since 2020, limited platform support |
-
-#### Recommended upgrade path
-
-1. **Near-term:** replace vosk wake detection with **openWakeWord** — truly open, custom phrase, lower CPU.
-2. **Production / commercial:** use **Porcupine** for best accuracy + lowest latency at the cost of a license.
-3. **Cloud-first deployment:** use **Deepgram** streaming with `keywords` parameter for wake detection + STT in one round-trip.
+- **Porcupine (Picovoice):** lower CPU and stronger wake-word precision
+- **openWakeWord:** open-source detector with trainable custom words
+- **Deepgram streaming keywords:** cloud-first option combining detection + STT
 
 ### STT alternatives
 
-| Technology | Offline | Notes |
-|---|---|---|
-| **vosk** (current) | Yes | Good accuracy, small models available |
-| **Whisper (faster-whisper)** | Yes | Excellent accuracy; use `tiny`/`base` for real-time |
-| **Deepgram** | No | Best accuracy + punctuation; streaming capable |
-| **Google STT** | No | High accuracy; requires GCP credentials |
+- faster-whisper (local)
+- Deepgram / OpenAI / Google (cloud)
 
 ### TTS alternatives
 
-| Technology | Offline | Notes |
-|---|---|---|
-| **pyttsx3** (current) | Yes | Uses OS native TTS (macOS: NSS, Linux: espeak, Windows: SAPI) |
-| **Coqui TTS** | Yes | Neural TTS, natural-sounding, multiple voices |
-| **edge-tts** | No | Microsoft Edge neural voices via unofficial API, high quality |
-| **macOS `say` subprocess** | Yes | Simple, no deps; macOS only |
-| **ElevenLabs** | No | Highest quality; paid API |
+- Coqui TTS (local neural)
+- macOS `say`
+- ElevenLabs (cloud)
 
----
-
-## Configuration reference
-
-All values configurable via `.env`.  See `.env.example` for defaults.
-
-| Variable | Component | Effect |
-|---|---|---|
-| `VOSK_MODEL_PATH` | Wake + STT | Path to vosk model directory |
-| `WAKE_PHRASE` | Wake | Substring to detect (lowercased) |
-| `RECORD_SECONDS` | Recorder | Fixed recording window in seconds |
-| `API_BASE_URL` | LLM | Base URL of OpenAI-compatible server |
-| `API_KEY` | LLM | Bearer token |
-| `MODEL_NAME` | LLM | Model identifier (`gpt-5.2`, etc.) |
-| `LLM_TEMPERATURE` | LLM | Sampling temperature (0.3 = low thinking) |
-| `LLM_MAX_TOKENS` | LLM | Max reply tokens |
-| `LLM_TIMEOUT` | LLM | HTTP timeout in seconds |
-| `BARGE_IN_THRESHOLD` | TTS | Mic RMS above which barge-in fires |
-| `SAMPLE_RATE` | Audio | PCM sample rate in Hz (must match vosk model) |
-| `LOG_LEVEL` | Logging | `DEBUG`, `INFO`, `WARNING`, `ERROR` |
-| `HISTORY_MAX_MESSAGES` | LLM | Rolling conversation window size |
+Current Part 1 default favors practical local operation with minimal setup friction.
