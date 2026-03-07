@@ -183,6 +183,74 @@ check_command_prefix() {
   return 1
 }
 
+probe_codex_cli_auth() {
+  local prefix="$1"
+  local timeout_s="${2:-25}"
+
+  python3 - "$prefix" "$timeout_s" <<'PY'
+import shlex
+import subprocess
+import sys
+
+prefix = sys.argv[1]
+timeout_s = int(sys.argv[2])
+
+args = shlex.split(prefix)
+if not args:
+    print("  ❌ Codex CLI auth probe: command is empty")
+    raise SystemExit(2)
+
+args.append("Reply with exactly: OK")
+
+try:
+    completed = subprocess.run(
+        args,
+        capture_output=True,
+        text=True,
+        timeout=timeout_s,
+        check=False,
+    )
+except subprocess.TimeoutExpired:
+    print(f"  ❌ Codex CLI auth probe timed out after {timeout_s}s")
+    raise SystemExit(3)
+except Exception as exc:
+    print(f"  ❌ Codex CLI auth probe failed to start: {exc}")
+    raise SystemExit(4)
+
+if completed.returncode == 0:
+    print("  ✅ Codex CLI auth probe")
+    raise SystemExit(0)
+
+blob = f"{completed.stderr or ''}\n{completed.stdout or ''}".lower()
+auth_indicators = (
+    "refresh_token_reused",
+    "provided authentication token is expired",
+    "token is expired",
+    "failed to refresh token",
+    "log out and sign in again",
+    "sign in again",
+    "401 unauthorized",
+)
+if any(token in blob for token in auth_indicators):
+    print("  ❌ Codex CLI auth invalid/expired — run: codex logout && codex login")
+    raise SystemExit(10)
+
+snippet_source = (completed.stderr or completed.stdout or "").strip()
+snippet = ""
+for line in snippet_source.splitlines():
+    candidate = line.strip()
+    if candidate:
+        snippet = candidate
+        break
+
+if snippet:
+    print(f"  ❌ Codex CLI auth probe failed (exit {completed.returncode}): {snippet[:140]}")
+else:
+    print(f"  ❌ Codex CLI auth probe failed (exit {completed.returncode})")
+raise SystemExit(11)
+PY
+}
+
 setup_backend() {
   local backend="$1"
   shift || true
@@ -348,7 +416,12 @@ doctor() {
       ;;
 
     codex_cli)
-      check_command_prefix "Codex CLI" "${CFG_CODEX_CLI_COMMAND:-codex exec}" || failures=$((failures + 1))
+      local codex_prefix="${CFG_CODEX_CLI_COMMAND:-codex exec}"
+      if check_command_prefix "Codex CLI" "$codex_prefix"; then
+        probe_codex_cli_auth "$codex_prefix" || failures=$((failures + 1))
+      else
+        failures=$((failures + 1))
+      fi
       ;;
 
     claude_cli)

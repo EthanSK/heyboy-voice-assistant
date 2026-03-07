@@ -199,6 +199,51 @@ def clean_cli_output(text: str) -> str:
     return "\n".join(filtered_lines).strip()
 
 
+def _looks_like_codex_auth_error(blob: str) -> bool:
+    lowered = (blob or "").lower()
+    indicators = (
+        "refresh_token_reused",
+        "provided authentication token is expired",
+        "token is expired",
+        "failed to refresh token",
+        "log out and sign in again",
+        "sign in again",
+        "401 unauthorized",
+    )
+    return any(token in lowered for token in indicators)
+
+
+def summarize_cli_failure_for_user(
+    backend_name: str,
+    returncode: int,
+    raw_stdout: str,
+    raw_stderr: str,
+) -> str:
+    """Map CLI backend failures to actionable, voice-safe user messages."""
+    combined = f"{raw_stderr or ''}\n{raw_stdout or ''}".lower()
+
+    if backend_name == "Codex CLI" and _looks_like_codex_auth_error(combined):
+        return (
+            "Codex CLI authentication expired. "
+            "Please run codex logout, then codex login, then try again."
+        )
+
+    if "command not found" in combined or "no such file or directory" in combined:
+        return (
+            f"{backend_name} is not available on PATH. "
+            "Run scripts/heyboy doctor for setup help."
+        )
+
+    if "permission denied" in combined:
+        return (
+            f"{backend_name} does not have permission to run. "
+            "Check executable permissions and try again."
+        )
+
+    logger.debug("%s non-zero return code=%s did not match known patterns.", backend_name, returncode)
+    return f"Sorry, {backend_name} returned an error."
+
+
 # ---------------------------------------------------------------------------
 # Audio + Vosk
 # ---------------------------------------------------------------------------
@@ -420,14 +465,21 @@ def query_cli_backend(
         logger.error("%s invocation failed: %s", backend_name, exc)
         return f"Sorry, {backend_name} invocation failed."
 
-    stdout = clean_cli_output(completed.stdout)
-    stderr = clean_cli_output(completed.stderr)
+    raw_stdout = completed.stdout or ""
+    raw_stderr = completed.stderr or ""
+    stdout = clean_cli_output(raw_stdout)
+    stderr = clean_cli_output(raw_stderr)
 
     if completed.returncode != 0:
         logger.error(
             "%s exited non-zero (%s). stderr=%r", backend_name, completed.returncode, stderr
         )
-        return f"Sorry, {backend_name} returned an error."
+        return summarize_cli_failure_for_user(
+            backend_name=backend_name,
+            returncode=completed.returncode,
+            raw_stdout=raw_stdout,
+            raw_stderr=raw_stderr,
+        )
 
     reply = (stdout or stderr).strip()
     if not reply:
