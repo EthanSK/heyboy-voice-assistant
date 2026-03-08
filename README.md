@@ -20,6 +20,7 @@ A local-first voice assistant scaffold that wakes on **"hey boy"**, records a sh
   - `claude_cli`
   - `generic_cli`
 - Barge-in interruption while assistant is speaking
+- Serialized TTS playback guard (prevents overlapping/jagged duplicate audio between turns)
 - Audio/STT/API failure recovery messaging (no silent failures)
 - OpenClaw-style helper CLI: `heyboy` / `scripts/heyboy`
 - macOS app/daemon mode with LaunchAgent
@@ -254,6 +255,19 @@ If your token is stale/reused, it reports:
 
 Runtime responses now surface this remediation directly instead of only saying
 `Codex CLI returned an error`.
+
+Latency-sensitive defaults are now explicit for Codex backend:
+
+- `CODEX_MODEL_NAME=gpt-5.3-codex`
+- `CODEX_REASONING_LEVEL=low`
+
+At runtime, HeyBoy normalizes `CODEX_CLI_COMMAND` and injects missing flags
+unless you already provided them in the command:
+
+- `-m <CODEX_MODEL_NAME>`
+- `-c model_reasoning_effort=<CODEX_REASONING_LEVEL>`
+
+So `CODEX_CLI_COMMAND="codex exec"` still runs with the intended model/reasoning.
 
 ### Claude Code CLI path
 

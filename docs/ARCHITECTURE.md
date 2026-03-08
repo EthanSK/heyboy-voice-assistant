@@ -96,6 +96,11 @@ If backend rejects these fields, request auto-retries without them.
 Runs local Codex CLI command, default:
 - `codex exec`
 
+For latency/predictability, runtime normalizes Codex command at call time and injects
+missing defaults:
+- `-m <CODEX_MODEL_NAME>` (default `gpt-5.3-codex`)
+- `-c model_reasoning_effort=<CODEX_REASONING_LEVEL>` (default `low`)
+
 ### C) `claude_cli`
 
 Runs local Claude Code CLI command, default:
@@ -110,6 +115,8 @@ Runs user-defined command prefix (e.g. Ollama or any other compatible local CLI)
 - playback with `pyttsx3`
 - concurrent mic monitor computes RMS
 - barge-in triggers when RMS exceeds threshold for configurable hold period
+- playback is serialized per utterance with stale-playback draining before a new utterance starts
+  (prevents overlapping/jagged duplicate audio if a previous engine thread lingers)
 
 Config:
 - `BARGE_IN_THRESHOLD`

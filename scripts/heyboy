@@ -37,7 +37,7 @@ Usage:
 Setup options:
   --api-key <token>          Set API_KEY (openclaw backend)
   --api-base-url <url>       Set API_BASE_URL (openclaw backend)
-  --model <name>             Set MODEL_NAME (default gpt-5.2)
+  --model <name>             Set model (openclaw default gpt-5.2; codex default gpt-5.3-codex)
   --thinking <level>         Set THINKING_LEVEL (default low)
   --stt-backend <name>       Set STT_BACKEND (vosk_local|deepgram)
   --deepgram-api-key <token> Set DEEPGRAM_API_KEY (for STT_BACKEND=deepgram)
@@ -264,12 +264,14 @@ setup_backend() {
   local api_key=""
   local api_base_url="$DEFAULT_API_BASE_URL"
   local model="gpt-5.2"
+  local model_set=0
   local thinking="low"
   local stt_backend=""
   local deepgram_api_key=""
   local deepgram_model="nova-3"
   local deepgram_model_set=0
   local codex_command="codex exec"
+  local codex_command_set=0
   local claude_command="claude --dangerously-skip-permissions --print"
   local generic_command=""
 
@@ -285,6 +287,7 @@ setup_backend() {
         ;;
       --model)
         model="${2:-}"
+        model_set=1
         shift 2
         ;;
       --thinking)
@@ -306,6 +309,7 @@ setup_backend() {
         ;;
       --codex-command)
         codex_command="${2:-}"
+        codex_command_set=1
         shift 2
         ;;
       --claude-command)
@@ -343,9 +347,22 @@ setup_backend() {
       ;;
 
     codex)
+      local codex_model="$model"
+      if [ "$model_set" -eq 0 ]; then
+        codex_model="gpt-5.3-codex"
+      fi
+
+      if [ "$codex_command_set" -eq 0 ]; then
+        codex_command="codex exec -m ${codex_model} -c model_reasoning_effort=${thinking}"
+      fi
+
       upsert_env ASSISTANT_BACKEND codex_cli
+      upsert_env CODEX_MODEL_NAME "$codex_model"
+      upsert_env CODEX_REASONING_LEVEL "$thinking"
       upsert_env CODEX_CLI_COMMAND "$codex_command"
       echo "[setup] Backend configured: codex_cli"
+      echo "        CODEX_MODEL_NAME=${codex_model}"
+      echo "        CODEX_REASONING_LEVEL=${thinking}"
       echo "        CODEX_CLI_COMMAND=${codex_command}"
       ;;
 
@@ -487,6 +504,10 @@ doctor() {
 
     codex_cli)
       local codex_prefix="${CFG_CODEX_CLI_COMMAND:-codex exec}"
+      local codex_model="${CFG_CODEX_MODEL_NAME:-gpt-5.3-codex}"
+      local codex_reasoning="${CFG_CODEX_REASONING_LEVEL:-${CFG_THINKING_LEVEL:-low}}"
+      echo "  ✅ CODEX_MODEL_NAME: ${codex_model}"
+      echo "  ✅ CODEX_REASONING_LEVEL: ${codex_reasoning}"
       if check_command_prefix "Codex CLI" "$codex_prefix"; then
         probe_codex_cli_auth "$codex_prefix" || failures=$((failures + 1))
       else

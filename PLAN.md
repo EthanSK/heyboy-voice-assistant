@@ -112,3 +112,17 @@ Config/rule files updated:
 - Added practical E2E smoke+integration test harness for macOS (`scripts/tests/e2e_smoke_macos.sh`) plus deterministic test backend (`scripts/tests/smoke_backend.py`).
 - Updated README/docs with exact E2E commands, validation status, and explicit UI verification boundaries.
 - Running local E2E smoke now and capturing artifacts under `artifacts/e2e/<timestamp>/`."
+
+### [2026-03-08 00:58 Europe/London] User
+"Okay. There's a few issues. After so the first turn still works, but then the second turn, I just hear two Hey Boys playing jagged audio just after each other. You need to do a full review in a sub agent for all this kind of buggy stuff because this is really not working. Do some proper end to end testing. Like, it's literally playing two in parallel the second time I talk. Also, it's still taking quite a bit of time. Between when I say something it responds, is it on the fastest model possible? Does it pass the flag in or how does it work?"
+
+### [2026-03-08 01:01 Europe/London] User
+"Sorry. I might not have explained this. The the it just off the second turn, it plays two audios in parallel over each other, just slightly jagged."
+
+### [2026-03-08 01:14 Europe/London] Assistant
+"Reliability + latency hardening completed:
+- Isolated second-turn duplicate/jagged audio root cause to TTS playback race in `BargeInTTS` (shared done event/engine state allowed overlap when previous worker lingered after timeout/stop).
+- Reworked TTS playback state management to serialize utterances and drain stale in-flight playback before starting next utterance.
+- Added codex command normalization for latency-sensitive defaults (`-m` + `model_reasoning_effort`) so wrapper consistently passes model/reasoning flags.
+- Expanded regression tests for duplicate playback, multi-turn stability, and codex latency defaults.
+- Re-ran unit and E2E smoke validation with passing results."
