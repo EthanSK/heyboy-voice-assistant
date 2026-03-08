@@ -1,6 +1,6 @@
 # USE_CASE.md — HeyBoy Interaction Matrix
 
-Last updated: 2026-03-07
+Last updated: 2026-03-08
 
 ## Scope
 
@@ -37,8 +37,9 @@ Primary focus for this pass: **multi-turn reliability** and avoiding the “firs
 |---|---|---|---|---|
 | TTS-01 | Assistant speaking and user interrupts | Playback stops on barge-in threshold | Implemented | `BargeInTTS.speak()` |
 | TTS-02 | Non-interruptible prompts (ack/setup) | Assistant waits for short prompt completion, with timeout safety | Implemented | `allow_barge_in=False` + forced stop timeout |
-| TTS-03 | TTS thread hangs | Assistant force-stops engine and recovers | Implemented | `thread.is_alive()` stop fallback |
+| TTS-03 | TTS thread hangs | Assistant force-stops engine and recovers | Implemented | stop + join fallback in `BargeInTTS` |
 | TTS-04 | Barge-in monitor stream error | Warn and continue (no crash loop) | Implemented | exception handling in barge-in monitor |
+| TTS-05 | Second-turn duplicate/jagged overlap | New utterance drains any stale playback before starting | Implemented + Tested | `tests/test_voice_assistant.py::test_barge_in_tts_prevents_parallel_overlap_on_lingering_stop` |
 
 ---
 

@@ -7,16 +7,28 @@
 ```bash
 scripts/tests/run_voice_assistant_unit.sh
 HEYBOY_ALLOW_DAEMON_SKIP=1 scripts/tests/e2e_smoke_macos.sh
-scripts/heyboy setup generic --command "python3 scripts/tests/smoke_backend.py"
 scripts/heyboy doctor
+```
+
+Additional Codex latency spot-check (manual):
+
+```bash
+codex exec -m gpt-5.3-codex "Reply with exactly OK"
+codex exec -m gpt-5.3-codex -c model_reasoning_effort=low "Reply with exactly OK"
 ```
 
 ### Unit test result (latest run)
 
 - test suite: `tests/test_voice_assistant.py`
-- total: `9`
-- pass: `9`
+- total: `14`
+- pass: `14`
 - fail: `0`
+
+Newly added regression coverage:
+
+- duplicate/jagged second-turn TTS overlap guard
+- 3-turn multi-turn stability path
+- codex command normalization (`-m` + `model_reasoning_effort` defaults)
 
 ### E2E result (latest run)
 
@@ -24,15 +36,27 @@ scripts/heyboy doctor
 - cli_status: `PASS`
 - daemon_status: `PASS`
 - run_loop_status: `PASS`
-- artifact directory: `artifacts/e2e/20260307-225618/`
+- artifact directory: `artifacts/e2e/20260308-013324/`
 
 Key artifacts:
 
-- `artifacts/e2e/20260307-225618/summary.txt`
-- `artifacts/e2e/20260307-225618/summary.json`
-- `artifacts/e2e/20260307-225618/03-doctor.log`
-- `artifacts/e2e/20260307-225618/06-app-status.log`
-- `artifacts/e2e/20260307-225618/08-run-loop.log`
+- `artifacts/e2e/20260308-013324/summary.txt`
+- `artifacts/e2e/20260308-013324/summary.json`
+- `artifacts/e2e/20260308-013324/03-doctor.log`
+- `artifacts/e2e/20260308-013324/06-app-status.log`
+- `artifacts/e2e/20260308-013324/08-run-loop.log`
+
+### Codex latency spot-check observations
+
+`Reply with exactly OK` prompt (warm runs, local machine/network variability applies):
+
+- before wrapper normalization (`codex exec -m gpt-5.3-codex`)
+  - avg: `2.093s`, median: `2.091s`
+- after wrapper normalization (`codex exec -m gpt-5.3-codex -c model_reasoning_effort=low`)
+  - avg: `3.074s`, median: `2.397s` (one slower outlier observed)
+
+Takeaway: latency is network/model-load variable, but wrapper now deterministically
+applies model/reasoning defaults for voice path so runtime behavior is predictable.
 
 ## UI/manual verification status
 

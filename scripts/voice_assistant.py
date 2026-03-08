@@ -151,6 +151,11 @@ LLM_TIMEOUT = _env_int("LLM_TIMEOUT", 30)
 
 # CLI backends
 CODEX_CLI_COMMAND = os.getenv("CODEX_CLI_COMMAND", "codex exec")
+CODEX_MODEL_NAME = (
+    os.getenv("CODEX_MODEL_NAME", os.getenv("MODEL_NAME", "gpt-5.3-codex"))
+    .strip()
+)
+CODEX_REASONING_LEVEL = os.getenv("CODEX_REASONING_LEVEL", THINKING_LEVEL).strip().lower()
 CLAUDE_CLI_COMMAND = os.getenv(
     "CLAUDE_CLI_COMMAND", "claude --dangerously-skip-permissions --print"
 )
@@ -345,6 +350,63 @@ def command_exists(command_prefix: str) -> bool:
     if not parts:
         return False
     return shutil.which(parts[0]) is not None
+
+
+
+def _looks_like_executable(token: str, name: str) -> bool:
+    base = os.path.basename(token).lower()
+    target = name.lower()
+    return base == target or base == f"{target}.exe"
+
+
+
+def _has_cli_option(args: List[str], short_flag: str, long_flag: str) -> bool:
+    for token in args:
+        if token == short_flag or token == long_flag:
+            return True
+        if token.startswith(f"{long_flag}="):
+            return True
+        if token.startswith(short_flag) and token != short_flag:
+            # Handles compact forms like -mgpt-5.3-codex
+            return True
+    return False
+
+
+
+def _has_model_reasoning_config(args: List[str]) -> bool:
+    for idx, token in enumerate(args):
+        if token.startswith("model_reasoning_effort="):
+            return True
+        if idx > 0 and args[idx - 1] in ("--config", "-c"):
+            if token.startswith("model_reasoning_effort="):
+                return True
+    return False
+
+
+
+def build_codex_cli_command(command_prefix: str) -> str:
+    """Normalize Codex CLI command for low-latency voice usage.
+
+    Guarantees non-interactive mode (`exec`) and injects model/reasoning defaults
+    unless already specified in the configured command.
+    """
+    args = shlex.split(command_prefix)
+    if not args:
+        return command_prefix
+
+    if not _looks_like_executable(args[0], "codex"):
+        return command_prefix
+
+    if "exec" not in args and "e" not in args:
+        args.insert(1, "exec")
+
+    if CODEX_MODEL_NAME and not _has_cli_option(args, "-m", "--model"):
+        args.extend(["-m", CODEX_MODEL_NAME])
+
+    if CODEX_REASONING_LEVEL and not _has_model_reasoning_config(args):
+        args.extend(["-c", f"model_reasoning_effort={CODEX_REASONING_LEVEL}"])
+
+    return " ".join(shlex.quote(part) for part in args)
 
 
 
@@ -698,7 +760,8 @@ def query_backend(user_text: str, history: List[Dict[str, str]]) -> str:
     if backend == "openclaw_api":
         return query_openclaw_api(user_text, history)
     if backend == "codex_cli":
-        return query_cli_backend(CODEX_CLI_COMMAND, user_text, history, "Codex CLI")
+        codex_command = build_codex_cli_command(CODEX_CLI_COMMAND)
+        return query_cli_backend(codex_command, user_text, history, "Codex CLI")
     if backend == "claude_cli":
         return query_cli_backend(
             CLAUDE_CLI_COMMAND, user_text, history, "Claude Code CLI"
@@ -963,103 +1026,170 @@ def handle_wake_session(model: vosk.Model, tts: "BargeInTTS", history: List[Dict
 # ---------------------------------------------------------------------------
 
 
+class _PlaybackState:
+    """Tracks one in-flight pyttsx3 utterance."""
+
+    def __init__(self, text: str) -> None:
+        self.text = text
+        self.engine: Optional[object] = None
+        self.engine_ready = threading.Event()
+        self.done_event = threading.Event()
+        self.thread: Optional[threading.Thread] = None
+
+
 class BargeInTTS:
     """pyttsx3 playback that can be interrupted when user speaks."""
 
     def __init__(self) -> None:
-        self._engine: Optional[object] = None
-        self._done_event = threading.Event()
+        self._speak_lock = threading.Lock()
+        self._state_lock = threading.Lock()
+        self._active_playback: Optional[_PlaybackState] = None
 
-    def _worker(self, text: str) -> None:
+    def _set_active_playback(self, state: Optional[_PlaybackState]) -> None:
+        with self._state_lock:
+            self._active_playback = state
+
+    def _get_active_playback(self) -> Optional[_PlaybackState]:
+        with self._state_lock:
+            return self._active_playback
+
+    def _worker(self, state: _PlaybackState) -> None:
         try:
-            self._engine = pyttsx3.init()
-            self._engine.say(text)  # type: ignore[union-attr]
-            self._engine.runAndWait()  # type: ignore[union-attr]
+            engine = pyttsx3.init()
+            state.engine = engine
+            state.engine_ready.set()
+            engine.say(state.text)
+            engine.runAndWait()
         except Exception as exc:
             logger.warning("TTS engine error: %s", exc)
         finally:
-            self._done_event.set()
+            if not state.engine_ready.is_set():
+                state.engine_ready.set()
+            state.done_event.set()
+            with self._state_lock:
+                if self._active_playback is state:
+                    self._active_playback = None
+
+    def _request_stop(self, state: _PlaybackState, reason: str) -> None:
+        state.engine_ready.wait(timeout=0.25)
+        engine = state.engine
+        if engine is None:
+            logger.debug("TTS stop requested before engine init (%s).", reason)
+            return
+        try:
+            engine.stop()
+        except Exception:
+            logger.debug("TTS engine stop failed (%s)", reason, exc_info=True)
+
+    def _join_playback_thread(self, state: _PlaybackState, timeout_s: float) -> bool:
+        thread = state.thread
+        if thread is None:
+            return state.done_event.is_set()
+        thread.join(timeout=timeout_s)
+        return not thread.is_alive()
+
+    def _drain_stale_playback(self) -> None:
+        stale = self._get_active_playback()
+        if stale is None or stale.done_event.is_set():
+            return
+
+        logger.warning(
+            "Detected unfinished TTS playback from previous turn; stopping before next utterance."
+        )
+        self._request_stop(stale, reason="stale playback")
+        stale.done_event.wait(timeout=2.0)
+        self._join_playback_thread(stale, timeout_s=1.0)
+
+    def _non_interruptible_timeout_s(self, text: str) -> float:
+        return max(2.0, min(15.0, len(text) * 0.11))
 
     def speak(self, text: str, allow_barge_in: bool = True) -> bool:
         """Speak text. Returns False if interrupted by barge-in."""
         if not text:
             return True
 
-        self._done_event.clear()
-        self._engine = None
+        with self._speak_lock:
+            self._drain_stale_playback()
 
-        logger.info("TTS speaking (%s chars)", len(text))
-        thread = threading.Thread(target=self._worker, args=(text,), daemon=True)
-        thread.start()
+            state = _PlaybackState(text)
+            thread = threading.Thread(target=self._worker, args=(state,), daemon=True)
+            state.thread = thread
+            self._set_active_playback(state)
 
-        if not allow_barge_in:
-            timeout_s = max(2.0, min(15.0, len(text) * 0.11))
-            finished = self._done_event.wait(timeout=timeout_s)
-            if not finished:
-                logger.warning("TTS playback exceeded %.1fs timeout; forcing stop.", timeout_s)
-                if self._engine is not None:
-                    try:
-                        self._engine.stop()  # type: ignore[union-attr]
-                    except Exception:
-                        pass
-            thread.join(timeout=1.0)
-            return True
+            logger.info("TTS speaking (%s chars)", len(text))
+            thread.start()
 
-        required_frames = max(1, int(BARGE_IN_HOLD_MS / (CHUNK_DURATION_S * 1000)))
-        grace_until = time.monotonic() + (BARGE_IN_GRACE_MS / 1000.0)
-        consecutive_frames = 0
-        interrupted = False
-
-        try:
-            with sd.InputStream(
-                samplerate=SAMPLE_RATE,
-                channels=CHANNELS,
-                dtype="float32",
-                blocksize=CHUNK_SIZE,
-            ) as stream:
-                while not self._done_event.is_set():
-                    chunk, _overflow = stream.read(CHUNK_SIZE)
-                    if time.monotonic() < grace_until:
-                        continue
-
-                    rms = compute_rms(chunk)
-                    if rms > BARGE_IN_THRESHOLD:
-                        consecutive_frames += 1
-                    else:
-                        consecutive_frames = 0
-
-                    logger.debug(
-                        "Barge-in rms=%.5f threshold=%.5f frames=%s/%s",
-                        rms,
-                        BARGE_IN_THRESHOLD,
-                        consecutive_frames,
-                        required_frames,
+            if not allow_barge_in:
+                timeout_s = self._non_interruptible_timeout_s(text)
+                finished = state.done_event.wait(timeout=timeout_s)
+                if not finished:
+                    logger.warning(
+                        "TTS playback exceeded %.1fs timeout; forcing stop.",
+                        timeout_s,
                     )
+                    self._request_stop(state, reason="non-interruptible timeout")
+                    state.done_event.wait(timeout=2.0)
 
-                    if consecutive_frames >= required_frames:
-                        logger.info("Barge-in detected. Stopping TTS playback.")
-                        if self._engine is not None:
-                            try:
-                                self._engine.stop()  # type: ignore[union-attr]
-                            except Exception:
-                                pass
-                        interrupted = True
-                        break
+                if not self._join_playback_thread(state, timeout_s=1.0):
+                    logger.warning(
+                        "TTS worker thread did not exit cleanly after non-interruptible playback."
+                    )
+                    self._request_stop(state, reason="non-interruptible forced join")
+                    self._join_playback_thread(state, timeout_s=2.0)
+                return True
 
-                    time.sleep(0.01)
+            required_frames = max(1, int(BARGE_IN_HOLD_MS / (CHUNK_DURATION_S * 1000)))
+            grace_until = time.monotonic() + (BARGE_IN_GRACE_MS / 1000.0)
+            consecutive_frames = 0
+            interrupted = False
 
-        except Exception as exc:
-            logger.warning("Barge-in monitor error: %s", exc)
-
-        thread.join(timeout=2.0)
-        if thread.is_alive() and self._engine is not None:
             try:
-                self._engine.stop()  # type: ignore[union-attr]
-            except Exception:
-                pass
-            thread.join(timeout=1.0)
+                with sd.InputStream(
+                    samplerate=SAMPLE_RATE,
+                    channels=CHANNELS,
+                    dtype="float32",
+                    blocksize=CHUNK_SIZE,
+                ) as stream:
+                    while not state.done_event.is_set():
+                        chunk, _overflow = stream.read(CHUNK_SIZE)
+                        if time.monotonic() < grace_until:
+                            continue
 
-        return not interrupted
+                        rms = compute_rms(chunk)
+                        if rms > BARGE_IN_THRESHOLD:
+                            consecutive_frames += 1
+                        else:
+                            consecutive_frames = 0
+
+                        logger.debug(
+                            "Barge-in rms=%.5f threshold=%.5f frames=%s/%s",
+                            rms,
+                            BARGE_IN_THRESHOLD,
+                            consecutive_frames,
+                            required_frames,
+                        )
+
+                        if consecutive_frames >= required_frames:
+                            logger.info("Barge-in detected. Stopping TTS playback.")
+                            self._request_stop(state, reason="barge-in")
+                            interrupted = True
+                            break
+
+                        time.sleep(0.01)
+
+            except Exception as exc:
+                logger.warning("Barge-in monitor error: %s", exc)
+
+            if not state.done_event.wait(timeout=2.0):
+                self._request_stop(state, reason="barge-in monitor timeout")
+                state.done_event.wait(timeout=2.0)
+
+            if not self._join_playback_thread(state, timeout_s=1.0):
+                logger.warning("TTS worker thread did not exit cleanly after barge-in monitor.")
+                self._request_stop(state, reason="barge-in forced join")
+                self._join_playback_thread(state, timeout_s=2.0)
+
+            return not interrupted
 
 
 # ---------------------------------------------------------------------------
@@ -1074,8 +1204,15 @@ def print_startup_banner() -> None:
     logger.info("STT        : %s", STT_BACKEND)
     if STT_BACKEND == "deepgram":
         logger.info("STT model  : %s", DEEPGRAM_MODEL)
-    logger.info("Model      : %s", MODEL_NAME)
-    logger.info("Thinking   : %s", THINKING_LEVEL)
+
+    if ASSISTANT_BACKEND == "codex_cli":
+        logger.info("Codex model: %s", CODEX_MODEL_NAME)
+        logger.info("Codex think: %s", CODEX_REASONING_LEVEL or "(unset)")
+        logger.info("Codex cmd  : %s", build_codex_cli_command(CODEX_CLI_COMMAND))
+    else:
+        logger.info("Model      : %s", MODEL_NAME)
+        logger.info("Thinking   : %s", THINKING_LEVEL)
+
     logger.info("Wake phrase: %r", WAKE_PHRASE)
     logger.info("Listen ack : %r", LISTEN_ACK)
     if FOLLOWUP_PROMPT:

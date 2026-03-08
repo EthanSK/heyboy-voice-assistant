@@ -1,4 +1,5 @@
 import importlib.util
+import threading
 import unittest
 from contextlib import ExitStack
 from pathlib import Path
@@ -39,6 +40,35 @@ class _FakeResponse:
 
     def json(self):
         return self._payload
+
+
+class _SlowStopEngine:
+    """Fake pyttsx3 engine that lingers after stop() to emulate jagged overlap races."""
+
+    def __init__(self, tracker: dict, linger_after_stop_s: float = 2.2) -> None:
+        self._tracker = tracker
+        self._linger_after_stop_s = linger_after_stop_s
+        self._stop_event = threading.Event()
+
+    def say(self, _text: str) -> None:
+        return None
+
+    def runAndWait(self) -> None:
+        with self._tracker["lock"]:
+            self._tracker["active"] += 1
+            self._tracker["max_active"] = max(
+                self._tracker["max_active"],
+                self._tracker["active"],
+            )
+
+        self._stop_event.wait(timeout=6.0)
+        threading.Event().wait(self._linger_after_stop_s)
+
+        with self._tracker["lock"]:
+            self._tracker["active"] -= 1
+
+    def stop(self) -> None:
+        self._stop_event.set()
 
 
 class VoiceAssistantTests(unittest.TestCase):
@@ -110,6 +140,47 @@ class VoiceAssistantTests(unittest.TestCase):
         self.assertEqual(mock_query.call_args_list[0].args[0], "can you hear me")
         self.assertEqual(mock_query.call_args_list[1].args[0], "what about now")
         self.assertEqual(len(history), 4)
+
+    def test_multi_turn_three_turns_remain_stable(self) -> None:
+        tts = FakeTTS()
+        history = []
+
+        with ExitStack() as stack:
+            stack.enter_context(mock.patch.object(va, "MULTI_TURN_ENABLED", True))
+            stack.enter_context(mock.patch.object(va, "MULTI_TURN_MAX_TURNS", 3))
+            stack.enter_context(mock.patch.object(va, "NO_SPEECH_RETRY_LIMIT", 0))
+            stack.enter_context(mock.patch.object(va, "FOLLOWUP_PROMPT", ""))
+
+            stack.enter_context(
+                mock.patch.object(
+                    va,
+                    "record_audio",
+                    side_effect=[self.audio, self.audio, self.audio],
+                )
+            )
+            stack.enter_context(
+                mock.patch.object(
+                    va,
+                    "transcribe",
+                    side_effect=["turn one", "turn two", "turn three"],
+                )
+            )
+            mock_query = stack.enter_context(
+                mock.patch.object(
+                    va,
+                    "query_backend",
+                    side_effect=["reply one", "reply two", "reply three"],
+                )
+            )
+
+            va.handle_wake_session(object(), tts, history)
+
+        self.assertEqual(mock_query.call_count, 3)
+        self.assertEqual(
+            [call.args[0] for call in mock_query.call_args_list],
+            ["turn one", "turn two", "turn three"],
+        )
+        self.assertEqual(len(history), 6)
 
     def test_followup_no_speech_ends_session(self) -> None:
         tts = FakeTTS()
@@ -275,6 +346,71 @@ class VoiceAssistantTests(unittest.TestCase):
 
         spoken = [text for text, _ in tts.spoken]
         self.assertIn("Deepgram transcription timed out.", spoken)
+
+    def test_codex_command_builder_injects_fast_defaults(self) -> None:
+        with ExitStack() as stack:
+            stack.enter_context(mock.patch.object(va, "CODEX_MODEL_NAME", "gpt-5.3-codex"))
+            stack.enter_context(mock.patch.object(va, "CODEX_REASONING_LEVEL", "low"))
+
+            command = va.build_codex_cli_command("codex exec")
+
+        self.assertIn("codex exec", command)
+        self.assertIn("-m gpt-5.3-codex", command)
+        self.assertIn("model_reasoning_effort=low", command)
+
+    def test_query_backend_codex_uses_normalized_command(self) -> None:
+        history = []
+
+        with ExitStack() as stack:
+            stack.enter_context(mock.patch.object(va, "ASSISTANT_BACKEND", "codex_cli"))
+            stack.enter_context(mock.patch.object(va, "CODEX_CLI_COMMAND", "codex exec"))
+            stack.enter_context(mock.patch.object(va, "CODEX_MODEL_NAME", "gpt-5.3-codex"))
+            stack.enter_context(mock.patch.object(va, "CODEX_REASONING_LEVEL", "low"))
+
+            mock_query_cli = stack.enter_context(
+                mock.patch.object(va, "query_cli_backend", return_value="ok")
+            )
+
+            result = va.query_backend("hello", history)
+
+        self.assertEqual(result, "ok")
+        normalized_command = mock_query_cli.call_args.args[0]
+        self.assertIn("-m gpt-5.3-codex", normalized_command)
+        self.assertIn("model_reasoning_effort=low", normalized_command)
+
+    def test_codex_command_builder_does_not_duplicate_existing_flags(self) -> None:
+        with ExitStack() as stack:
+            stack.enter_context(mock.patch.object(va, "CODEX_MODEL_NAME", "gpt-5.3-codex"))
+            stack.enter_context(mock.patch.object(va, "CODEX_REASONING_LEVEL", "low"))
+
+            command = va.build_codex_cli_command(
+                "codex exec -m gpt-5.3-codex -c model_reasoning_effort=low"
+            )
+
+        self.assertEqual(command.count("-m gpt-5.3-codex"), 1)
+        self.assertEqual(command.count("model_reasoning_effort=low"), 1)
+
+    def test_barge_in_tts_prevents_parallel_overlap_on_lingering_stop(self) -> None:
+        tracker = {
+            "active": 0,
+            "max_active": 0,
+            "lock": threading.Lock(),
+        }
+
+        def engine_factory() -> _SlowStopEngine:
+            return _SlowStopEngine(tracker=tracker, linger_after_stop_s=2.2)
+
+        tts = va.BargeInTTS()
+
+        with mock.patch.object(va.pyttsx3, "init", side_effect=engine_factory):
+            tts.speak("first", allow_barge_in=False)
+            tts.speak("second", allow_barge_in=False)
+
+        self.assertEqual(
+            tracker["max_active"],
+            1,
+            "Expected serialized playback; overlapping TTS workers indicate duplicate audio race.",
+        )
 
 
 if __name__ == "__main__":
