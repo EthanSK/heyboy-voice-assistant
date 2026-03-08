@@ -111,14 +111,14 @@ WAKE_ONLY_PROMPT = os.getenv(
     "WAKE_ONLY_PROMPT",
     "I heard the wake phrase, but not your request.",
 )
-FOLLOWUP_PROMPT = os.getenv("FOLLOWUP_PROMPT", "Go ahead.")
+FOLLOWUP_PROMPT = os.getenv("FOLLOWUP_PROMPT", "")
 FOLLOWUP_NO_SPEECH_PROMPT = os.getenv(
     "FOLLOWUP_NO_SPEECH_PROMPT",
     "Still here. What next?",
 )
 FOLLOWUP_TIMEOUT_PROMPT = os.getenv(
     "FOLLOWUP_TIMEOUT_PROMPT",
-    "Okay. Say hey boy when you want to continue.",
+    "Okay, pausing now.",
 )
 SESSION_END_PROMPT = os.getenv("SESSION_END_PROMPT", "")
 EMPTY_BACKEND_REPLY = os.getenv(
@@ -151,11 +151,8 @@ LLM_TIMEOUT = _env_int("LLM_TIMEOUT", 30)
 
 # CLI backends
 CODEX_CLI_COMMAND = os.getenv("CODEX_CLI_COMMAND", "codex exec")
-CODEX_MODEL_NAME = (
-    os.getenv("CODEX_MODEL_NAME", os.getenv("MODEL_NAME", "gpt-5.3-codex"))
-    .strip()
-)
-CODEX_REASONING_LEVEL = os.getenv("CODEX_REASONING_LEVEL", THINKING_LEVEL).strip().lower()
+CODEX_MODEL_NAME = os.getenv("CODEX_MODEL_NAME", "gpt-5.2").strip()
+CODEX_REASONING_LEVEL = os.getenv("CODEX_REASONING_LEVEL", "none").strip().lower()
 CLAUDE_CLI_COMMAND = os.getenv(
     "CLAUDE_CLI_COMMAND", "claude --dangerously-skip-permissions --print"
 )
@@ -171,6 +168,16 @@ SYSTEM_PROMPT = os.getenv(
 BARGE_IN_THRESHOLD = _env_float("BARGE_IN_THRESHOLD", 0.03)
 BARGE_IN_HOLD_MS = _env_int("BARGE_IN_HOLD_MS", 220)
 BARGE_IN_GRACE_MS = _env_int("BARGE_IN_GRACE_MS", 350)
+
+# TTS/wake echo protections
+TTS_DUPLICATE_WINDOW_MS = max(0, _env_int("TTS_DUPLICATE_WINDOW_MS", 1200))
+WAKE_SUPPRESS_AFTER_TTS_MS = max(0, _env_int("WAKE_SUPPRESS_AFTER_TTS_MS", 900))
+
+# Speech endpointing (latency)
+EARLY_ENDPOINTING_ENABLED = _env_bool("EARLY_ENDPOINTING_ENABLED", True)
+ENDPOINT_SPEECH_THRESHOLD = _env_float("ENDPOINT_SPEECH_THRESHOLD", 0.015)
+ENDPOINT_MIN_SPEECH_MS = max(0, _env_int("ENDPOINT_MIN_SPEECH_MS", 220))
+ENDPOINT_TRAILING_SILENCE_MS = max(0, _env_int("ENDPOINT_TRAILING_SILENCE_MS", 680))
 
 # Audio recovery / diagnostics
 AUDIO_RETRY_ATTEMPTS = max(1, _env_int("AUDIO_RETRY_ATTEMPTS", 3))
@@ -338,6 +345,12 @@ def validate_runtime_config() -> bool:
         valid = False
     if HISTORY_MAX_CHARS < 200:
         logger.error("HISTORY_MAX_CHARS is too low (%s). Increase it to >= 200.", HISTORY_MAX_CHARS)
+        valid = False
+    if ENDPOINT_SPEECH_THRESHOLD <= 0 or ENDPOINT_SPEECH_THRESHOLD > 1.0:
+        logger.error(
+            "ENDPOINT_SPEECH_THRESHOLD must be in (0,1], got %s",
+            ENDPOINT_SPEECH_THRESHOLD,
+        )
         valid = False
 
     return valid
@@ -585,8 +598,14 @@ def load_vosk_model(model_path: str) -> vosk.Model:
 
 
 
-def wait_for_wake_phrase(model: vosk.Model) -> None:
+def wait_for_wake_phrase(model: vosk.Model, suppress_until_mono: float = 0.0) -> None:
     """Block until wake phrase is detected from live mic stream."""
+
+    now = time.monotonic()
+    if suppress_until_mono > now:
+        delay = suppress_until_mono - now
+        logger.info("Wake detector cooldown active for %.2fs", delay)
+        time.sleep(delay)
 
     def _listen_until_wake() -> None:
         recognizer = vosk.KaldiRecognizer(model, SAMPLE_RATE)
@@ -621,18 +640,78 @@ def wait_for_wake_phrase(model: vosk.Model) -> None:
 
 
 def record_audio(duration_s: int, label: str = "listen") -> np.ndarray:
-    """Record mono int16 audio from default microphone."""
+    """Record mono int16 audio from default microphone.
+
+    Uses optional early endpointing so we can stop shortly after the user stops
+    speaking instead of always waiting the full listen window.
+    """
     duration_s = max(1, int(duration_s))
 
     def _capture() -> np.ndarray:
         logger.info("Recording %s window: %ss", label, duration_s)
-        recorded = sd.rec(
-            int(duration_s * SAMPLE_RATE),
+
+        max_frames = int(duration_s * SAMPLE_RATE)
+        min_speech_chunks = max(
+            1,
+            int(ENDPOINT_MIN_SPEECH_MS / max(1.0, CHUNK_DURATION_S * 1000.0)),
+        )
+        trailing_silence_chunks = max(
+            1,
+            int(ENDPOINT_TRAILING_SILENCE_MS / max(1.0, CHUNK_DURATION_S * 1000.0)),
+        )
+
+        captured_chunks: List[np.ndarray] = []
+        speech_started = False
+        speech_chunk_count = 0
+        silence_after_speech_chunks = 0
+        total_frames = 0
+
+        with sd.InputStream(
             samplerate=SAMPLE_RATE,
             channels=CHANNELS,
-            dtype="int16",
-            blocking=True,
-        )
+            dtype="float32",
+            blocksize=CHUNK_SIZE,
+        ) as stream:
+            while total_frames < max_frames:
+                chunk, _overflow = stream.read(CHUNK_SIZE)
+                chunk_np = np.asarray(chunk, dtype=np.float32)
+                if chunk_np.ndim == 1:
+                    chunk_np = chunk_np.reshape(-1, 1)
+
+                frame_count = int(chunk_np.shape[0])
+                if frame_count <= 0:
+                    continue
+
+                captured_chunks.append(chunk_np[:, :1].copy())
+                total_frames += frame_count
+
+                rms = compute_rms(chunk_np)
+                if rms >= ENDPOINT_SPEECH_THRESHOLD:
+                    speech_started = True
+                    speech_chunk_count += 1
+                    silence_after_speech_chunks = 0
+                elif speech_started:
+                    silence_after_speech_chunks += 1
+
+                if (
+                    EARLY_ENDPOINTING_ENABLED
+                    and speech_started
+                    and speech_chunk_count >= min_speech_chunks
+                    and silence_after_speech_chunks >= trailing_silence_chunks
+                ):
+                    logger.info(
+                        "Early endpoint reached (%s speech chunks, %s trailing silence chunks).",
+                        speech_chunk_count,
+                        silence_after_speech_chunks,
+                    )
+                    break
+
+        if captured_chunks:
+            audio_float = np.concatenate(captured_chunks, axis=0)
+        else:
+            audio_float = np.zeros((1, 1), dtype=np.float32)
+
+        recorded = (np.clip(audio_float, -1.0, 1.0) * 32767.0).astype(np.int16)
 
         if DEBUG_SAVE_AUDIO:
             DEBUG_AUDIO_DIR.mkdir(parents=True, exist_ok=True)
@@ -1044,6 +1123,9 @@ class BargeInTTS:
         self._speak_lock = threading.Lock()
         self._state_lock = threading.Lock()
         self._active_playback: Optional[_PlaybackState] = None
+        self._last_text: str = ""
+        self._last_text_started_mono: float = 0.0
+        self._last_playback_end_mono: float = 0.0
 
     def _set_active_playback(self, state: Optional[_PlaybackState]) -> None:
         with self._state_lock:
@@ -1067,6 +1149,7 @@ class BargeInTTS:
                 state.engine_ready.set()
             state.done_event.set()
             with self._state_lock:
+                self._last_playback_end_mono = time.monotonic()
                 if self._active_playback is state:
                     self._active_playback = None
 
@@ -1103,12 +1186,46 @@ class BargeInTTS:
     def _non_interruptible_timeout_s(self, text: str) -> float:
         return max(2.0, min(15.0, len(text) * 0.11))
 
+    def wake_suppress_until(self) -> float:
+        with self._state_lock:
+            return self._last_playback_end_mono + (WAKE_SUPPRESS_AFTER_TTS_MS / 1000.0)
+
+    def _dedupe_text_within_window(self, text: str) -> bool:
+        if TTS_DUPLICATE_WINDOW_MS <= 0:
+            return False
+
+        candidate = normalize_text(text)
+        if not candidate:
+            return False
+
+        now = time.monotonic()
+        with self._state_lock:
+            last_text = normalize_text(self._last_text)
+            elapsed_ms = (now - self._last_text_started_mono) * 1000.0
+            is_duplicate = bool(
+                last_text
+                and candidate == last_text
+                and elapsed_ms <= float(TTS_DUPLICATE_WINDOW_MS)
+            )
+            if not is_duplicate:
+                self._last_text = text
+                self._last_text_started_mono = now
+            return is_duplicate
+
     def speak(self, text: str, allow_barge_in: bool = True) -> bool:
         """Speak text. Returns False if interrupted by barge-in."""
         if not text:
             return True
 
         with self._speak_lock:
+            if self._dedupe_text_within_window(text):
+                logger.warning(
+                    "Dropping duplicate TTS within %sms window: %r",
+                    TTS_DUPLICATE_WINDOW_MS,
+                    text[:80],
+                )
+                return True
+
             self._drain_stale_playback()
 
             state = _PlaybackState(text)
@@ -1219,6 +1336,13 @@ def print_startup_banner() -> None:
         logger.info("Follow-up  : %r", FOLLOWUP_PROMPT)
     logger.info("Listen win : %ss", LISTEN_SECONDS)
     logger.info(
+        "Endpoint   : %s (thr=%.3f min=%sms tail=%sms)",
+        "on" if EARLY_ENDPOINTING_ENABLED else "off",
+        ENDPOINT_SPEECH_THRESHOLD,
+        ENDPOINT_MIN_SPEECH_MS,
+        ENDPOINT_TRAILING_SILENCE_MS,
+    )
+    logger.info(
         "Multi-turn : %s (max=%s turns, follow-up=%ss)",
         "on" if MULTI_TURN_ENABLED else "off",
         MULTI_TURN_MAX_TURNS,
@@ -1229,6 +1353,11 @@ def print_startup_banner() -> None:
         NO_SPEECH_RETRY_LIMIT,
         WAKE_ONLY_RETRY_LIMIT,
         AUDIO_RETRY_ATTEMPTS,
+    )
+    logger.info(
+        "TTS guard  : dedupe=%sms wake-suppress=%sms",
+        TTS_DUPLICATE_WINDOW_MS,
+        WAKE_SUPPRESS_AFTER_TTS_MS,
     )
     logger.info("History    : %s msgs / %s chars", HISTORY_MAX_MESSAGES, HISTORY_MAX_CHARS)
     logger.info("Audio chunk: %.2fs", CHUNK_DURATION_S)
@@ -1270,7 +1399,7 @@ def main() -> None:
     while True:
         try:
             # 1) Wait for wake phrase
-            wait_for_wake_phrase(model)
+            wait_for_wake_phrase(model, suppress_until_mono=tts.wake_suppress_until())
 
             # 2) Handle one wake-triggered interaction session
             handle_wake_session(model, tts, history)

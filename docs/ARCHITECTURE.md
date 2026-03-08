@@ -60,9 +60,11 @@ Why this default:
 
 ## 2) Listen window capture
 
-- fixed duration from `LISTEN_SECONDS` (recommended 5–10s)
-- default is **7s**
+- max duration from `LISTEN_SECONDS` (recommended 5–10s)
+- default max is **7s**
 - captured as int16 mono audio buffer
+- latency optimization: early endpointing stops capture shortly after trailing silence
+  instead of always waiting the full window
 - when `MULTI_TURN_ENABLED=1`, follow-up turns use `FOLLOWUP_LISTEN_SECONDS`
   without requiring the wake phrase again
 
@@ -98,8 +100,8 @@ Runs local Codex CLI command, default:
 
 For latency/predictability, runtime normalizes Codex command at call time and injects
 missing defaults:
-- `-m <CODEX_MODEL_NAME>` (default `gpt-5.3-codex`)
-- `-c model_reasoning_effort=<CODEX_REASONING_LEVEL>` (default `low`)
+- `-m <CODEX_MODEL_NAME>` (default `gpt-5.2`)
+- `-c model_reasoning_effort=<CODEX_REASONING_LEVEL>` (default `none`)
 
 ### C) `claude_cli`
 
@@ -122,6 +124,8 @@ Config:
 - `BARGE_IN_THRESHOLD`
 - `BARGE_IN_HOLD_MS`
 - `BARGE_IN_GRACE_MS`
+- `TTS_DUPLICATE_WINDOW_MS` (drops identical back-to-back utterances)
+- `WAKE_SUPPRESS_AFTER_TTS_MS` (cooldown to avoid self-wake from speaker bleed)
 
 This reduces false interruptions from speaker bleed while still allowing quick user interruption.
 

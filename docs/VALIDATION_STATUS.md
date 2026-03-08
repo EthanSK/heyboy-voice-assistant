@@ -7,26 +7,28 @@
 ```bash
 scripts/tests/run_voice_assistant_unit.sh
 HEYBOY_ALLOW_DAEMON_SKIP=1 scripts/tests/e2e_smoke_macos.sh
-scripts/heyboy doctor
 ```
 
 Additional Codex latency spot-check (manual):
 
 ```bash
 codex exec -m gpt-5.3-codex "Reply with exactly OK"
-codex exec -m gpt-5.3-codex -c model_reasoning_effort=low "Reply with exactly OK"
+codex exec -m gpt-5.2 -c model_reasoning_effort=none "Reply with exactly OK"
 ```
 
 ### Unit test result (latest run)
 
 - test suite: `tests/test_voice_assistant.py`
-- total: `14`
-- pass: `14`
+- total: `17`
+- pass: `17`
 - fail: `0`
 
 Newly added regression coverage:
 
 - duplicate/jagged second-turn TTS overlap guard
+- duplicate short-prompt suppression window
+- wake-suppression cooldown after playback
+- early endpointing (trailing silence stop)
 - 3-turn multi-turn stability path
 - codex command normalization (`-m` + `model_reasoning_effort` defaults)
 
@@ -36,43 +38,29 @@ Newly added regression coverage:
 - cli_status: `PASS`
 - daemon_status: `PASS`
 - run_loop_status: `PASS`
-- artifact directory: `artifacts/e2e/20260308-013324/`
+- artifact directory: `artifacts/e2e/20260308-014532/`
 
 Key artifacts:
 
-- `artifacts/e2e/20260308-013324/summary.txt`
-- `artifacts/e2e/20260308-013324/summary.json`
-- `artifacts/e2e/20260308-013324/03-doctor.log`
-- `artifacts/e2e/20260308-013324/06-app-status.log`
-- `artifacts/e2e/20260308-013324/08-run-loop.log`
+- `artifacts/e2e/20260308-014532/summary.txt`
+- `artifacts/e2e/20260308-014532/summary.json`
+- `artifacts/e2e/20260308-014532/03-doctor.log`
+- `artifacts/e2e/20260308-014532/06-app-status.log`
+- `artifacts/e2e/20260308-014532/08-run-loop.log`
 
 ### Codex latency spot-check observations
 
-`Reply with exactly OK` prompt (warm runs, local machine/network variability applies):
+`Reply with exactly OK` prompt (3-run spot check, local machine/network variability applies):
 
-- before wrapper normalization (`codex exec -m gpt-5.3-codex`)
-  - avg: `2.093s`, median: `2.091s`
-- after wrapper normalization (`codex exec -m gpt-5.3-codex -c model_reasoning_effort=low`)
-  - avg: `3.074s`, median: `2.397s` (one slower outlier observed)
+- `codex exec -m gpt-5.3-codex`
+  - avg: `2.390s`, median: `2.160s`
+- `codex exec -m gpt-5.2 -c model_reasoning_effort=none`
+  - avg: `2.046s`, median: `2.068s`
 
-Takeaway: latency is network/model-load variable, but wrapper now deterministically
-applies model/reasoning defaults for voice path so runtime behavior is predictable.
-
-## UI/manual verification status
-
-Tested now:
-
-- ✅ CLI install/setup/doctor flow
-- ✅ Foreground run loop startup (wake-listen loop observed)
-- ✅ LaunchAgent lifecycle on macOS (`app install/start/status/stop`)
-- ✅ OpenClaw skill archive packaging (`scripts/package_openclaw_skill.sh`)
-
-Not manually UI-verified yet:
-
-- ❌ No desktop GUI/Electron/Swift interface was manually clicked through in this run.
-- ❌ No Windows runtime/manual UI validation (docs/scripts only, untested).
+Takeaway: `gpt-5.2 + reasoning none` was measurably faster in this sample and is now the
+Codex default for latency-sensitive HeyBoy voice turns.
 
 ## Coverage gaps
 
-- No true UI automation yet for a desktop app shell (Electron/Swift UI not exercised).
-- No Windows live execution coverage (best-effort scripts/docs only).
+- No true desktop UI automation coverage (CLI + daemon lifecycle covered).
+- No Windows live execution coverage (docs/scripts only).

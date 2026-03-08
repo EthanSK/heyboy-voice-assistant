@@ -1,5 +1,6 @@
 import importlib.util
 import threading
+import time
 import unittest
 from contextlib import ExitStack
 from pathlib import Path
@@ -69,6 +70,37 @@ class _SlowStopEngine:
 
     def stop(self) -> None:
         self._stop_event.set()
+
+
+class _QuickEngine:
+    def __init__(self, tracker: dict) -> None:
+        self._tracker = tracker
+
+    def say(self, _text: str) -> None:
+        return None
+
+    def runAndWait(self) -> None:
+        with self._tracker["lock"]:
+            self._tracker["calls"] += 1
+
+    def stop(self) -> None:
+        return None
+
+
+class _ChunkInputStream:
+    def __init__(self, chunks: List[np.ndarray]) -> None:
+        self._chunks = list(chunks)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def read(self, chunk_size: int):
+        if self._chunks:
+            return self._chunks.pop(0), False
+        return np.zeros((chunk_size, 1), dtype=np.float32), False
 
 
 class VoiceAssistantTests(unittest.TestCase):
@@ -320,14 +352,24 @@ class VoiceAssistantTests(unittest.TestCase):
             stack.enter_context(mock.patch.object(va, "DEBUG_SAVE_AUDIO", False))
             stack.enter_context(mock.patch.object(va.time, "sleep", return_value=None))
 
-            mock_rec = stack.enter_context(
-                mock.patch.object(va.sd, "rec", side_effect=[RuntimeError("temp audio failure"), self.audio])
+            stream_ok = _ChunkInputStream(
+                [
+                    np.zeros((va.CHUNK_SIZE, 1), dtype=np.float32),
+                    np.zeros((va.CHUNK_SIZE, 1), dtype=np.float32),
+                ]
+            )
+            mock_stream = stack.enter_context(
+                mock.patch.object(
+                    va.sd,
+                    "InputStream",
+                    side_effect=[RuntimeError("temp audio failure"), stream_ok],
+                )
             )
 
             recorded = va.record_audio(1, label="test")
 
-        self.assertEqual(mock_rec.call_count, 2)
-        self.assertEqual(recorded.shape, self.audio.shape)
+        self.assertEqual(mock_stream.call_count, 2)
+        self.assertGreater(recorded.shape[0], 0)
 
     def test_stt_error_is_spoken_as_recovery_message(self) -> None:
         tts = FakeTTS()
@@ -411,6 +453,70 @@ class VoiceAssistantTests(unittest.TestCase):
             1,
             "Expected serialized playback; overlapping TTS workers indicate duplicate audio race.",
         )
+
+    def test_barge_in_tts_dedupes_duplicate_prompt_within_window(self) -> None:
+        tracker = {
+            "calls": 0,
+            "lock": threading.Lock(),
+        }
+
+        def engine_factory() -> _QuickEngine:
+            return _QuickEngine(tracker=tracker)
+
+        tts = va.BargeInTTS()
+
+        with ExitStack() as stack:
+            stack.enter_context(mock.patch.object(va, "TTS_DUPLICATE_WINDOW_MS", 5000))
+            stack.enter_context(mock.patch.object(va.pyttsx3, "init", side_effect=engine_factory))
+
+            first = tts.speak("Hey boy", allow_barge_in=False)
+            second = tts.speak("Hey boy", allow_barge_in=False)
+
+        self.assertTrue(first)
+        self.assertTrue(second)
+        self.assertEqual(tracker["calls"], 1)
+
+    def test_wake_suppress_until_tracks_last_tts_playback_end(self) -> None:
+        tracker = {
+            "calls": 0,
+            "lock": threading.Lock(),
+        }
+
+        def engine_factory() -> _QuickEngine:
+            return _QuickEngine(tracker=tracker)
+
+        tts = va.BargeInTTS()
+
+        with ExitStack() as stack:
+            stack.enter_context(mock.patch.object(va, "WAKE_SUPPRESS_AFTER_TTS_MS", 900))
+            stack.enter_context(mock.patch.object(va.pyttsx3, "init", side_effect=engine_factory))
+
+            tts.speak("hello", allow_barge_in=False)
+            suppress_until = tts.wake_suppress_until()
+
+        self.assertGreater(suppress_until, time.monotonic())
+
+    def test_record_audio_endpointing_stops_after_trailing_silence(self) -> None:
+        speech = np.full((4, 1), 0.6, dtype=np.float32)
+        silence = np.zeros((4, 1), dtype=np.float32)
+
+        stream = _ChunkInputStream([speech, speech, silence, silence, silence, silence])
+
+        with ExitStack() as stack:
+            stack.enter_context(mock.patch.object(va, "SAMPLE_RATE", 40))
+            stack.enter_context(mock.patch.object(va, "CHUNK_SIZE", 4))
+            stack.enter_context(mock.patch.object(va, "CHUNK_DURATION_S", 0.10))
+            stack.enter_context(mock.patch.object(va, "ENDPOINT_SPEECH_THRESHOLD", 0.10))
+            stack.enter_context(mock.patch.object(va, "ENDPOINT_MIN_SPEECH_MS", 100))
+            stack.enter_context(mock.patch.object(va, "ENDPOINT_TRAILING_SILENCE_MS", 200))
+            stack.enter_context(mock.patch.object(va, "EARLY_ENDPOINTING_ENABLED", True))
+            stack.enter_context(mock.patch.object(va, "DEBUG_SAVE_AUDIO", False))
+            stack.enter_context(mock.patch.object(va.sd, "InputStream", return_value=stream))
+
+            recorded = va.record_audio(2, label="endpoint-test")
+
+        self.assertLess(recorded.shape[0], 80)
+
 
 
 if __name__ == "__main__":
