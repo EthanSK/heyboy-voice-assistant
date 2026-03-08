@@ -126,3 +126,19 @@ Config/rule files updated:
 - Added codex command normalization for latency-sensitive defaults (`-m` + `model_reasoning_effort`) so wrapper consistently passes model/reasoning flags.
 - Expanded regression tests for duplicate playback, multi-turn stability, and codex latency defaults.
 - Re-ran unit and E2E smoke validation with passing results."
+
+---
+
+## 2026-03-08 — Multi-turn jagged/double-audio + latency follow-up
+
+### Ethan report (verbatim)
+> "Okay. There's a few issues. After so the first turn still works, but then the second turn, I just hear two Hey Boys playing jagged audio just after each other. You need to do a full review in a sub agent for all this kind of buggy stuff because this is really not working. Do some proper end to end testing. Like, it's literally playing two in parallel the second time I talk. Also, it's still taking quite a bit of time. Between when I say something it responds, is it on the fastest model possible? Does it pass the flag in or how does it work?"
+
+### Work completed
+- Added TTS duplicate-utterance suppression (`TTS_DUPLICATE_WINDOW_MS`).
+- Added wake-listener post-TTS suppression cooldown (`WAKE_SUPPRESS_AFTER_TTS_MS`).
+- Added early endpointing in audio capture (stop on trailing silence) for lower turn latency.
+- Tuned Codex default model/flags for lower latency (`gpt-5.2`, `model_reasoning_effort=none`).
+- Updated docs/config defaults (`.env.example`, `README.md`, `USE_CASE.md`, `docs/*`).
+- Extended regression tests for duplicate prompt suppression, wake suppression cooldown, and endpointing behavior.
+- Re-ran unit + e2e smoke validation.

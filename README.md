@@ -258,8 +258,8 @@ Runtime responses now surface this remediation directly instead of only saying
 
 Latency-sensitive defaults are now explicit for Codex backend:
 
-- `CODEX_MODEL_NAME=gpt-5.3-codex`
-- `CODEX_REASONING_LEVEL=low`
+- `CODEX_MODEL_NAME=gpt-5.2`
+- `CODEX_REASONING_LEVEL=none`
 
 At runtime, HeyBoy normalizes `CODEX_CLI_COMMAND` and injects missing flags
 unless you already provided them in the command:
@@ -293,6 +293,17 @@ Key `.env` settings:
 - `FOLLOWUP_LISTEN_SECONDS=7`
 - `NO_SPEECH_RETRY_LIMIT=1`
 - `WAKE_ONLY_RETRY_LIMIT=1`
+- `FOLLOWUP_PROMPT=""` (no extra audio before follow-up capture)
+- `FOLLOWUP_TIMEOUT_PROMPT="Okay, pausing now."`
+
+Latency and anti-jitter settings:
+
+- `EARLY_ENDPOINTING_ENABLED=1`
+- `ENDPOINT_SPEECH_THRESHOLD=0.015`
+- `ENDPOINT_MIN_SPEECH_MS=220`
+- `ENDPOINT_TRAILING_SILENCE_MS=680`
+- `TTS_DUPLICATE_WINDOW_MS=1200`
+- `WAKE_SUPPRESS_AFTER_TTS_MS=900`
 
 Disable multi-turn if you prefer explicit wake-word each turn:
 
