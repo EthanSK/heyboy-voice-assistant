@@ -21,3 +21,4 @@ artifacts/
 # Downloaded models (keep placeholder only)
 models/*
 !models/.gitkeep
+PLAN.md
