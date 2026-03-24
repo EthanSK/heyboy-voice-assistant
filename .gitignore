@@ -22,5 +22,3 @@ artifacts/
 models/*
 !models/.gitkeep
 
-# Planning / chat log
-PLAN.md
