@@ -1,3 +1,5 @@
+# ⚠️ I didn't get this working
+
 # heyboy-voice-assistant
 
 **Works with any of your AI subscriptions.**
